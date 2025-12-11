@@ -1,3 +1,4 @@
+// app/components/Navbar.jsx
 'use client';
 
 import Link from 'next/link';
@@ -21,10 +22,10 @@ export default function Navbar() {
               src="/woc-avatar.png"
               alt="WoC avatar"
               className="h-full w-full object-cover"
-              style={{ objectPosition: '18% 20%' }} // focuses on the face/upper body
+              style={{ objectPosition: '20% 20%' }} // focuses on face/torso
             />
 
-            {/* Glow ring that reacts to theme/mood */}
+            {/* Glow ring */}
             <span
               className="
                 pointer-events-none absolute inset-0 rounded-full 
@@ -78,7 +79,7 @@ export default function Navbar() {
           <ThemeToggle />
 
           <a
-            href="https://discord.com/oauth2/authorize" // put your real invite URL here
+            href="https://discord.com/oauth2/authorize" // your actual invite
             target="_blank"
             rel="noreferrer"
             className="hidden sm:inline-flex items-center gap-2 text-xs sm:text-sm woc-btn-primary"
