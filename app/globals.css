@@ -1,0 +1,404 @@
+/* app/globals.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------- Base ---------- */
+:root {
+  --transition-fast: 180ms ease-out;
+}
+
+/* Body uses theme variables */
+body {
+  margin: 0;
+  padding: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Inter", sans-serif;
+  background: var(--bg-root);
+  color: var(--text-main);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+/* Main shell wrapper */
+.woc-shell {
+  background: var(--bg-shell);
+  color: var(--text-main);
+  transition:
+    background-color var(--transition-fast),
+    color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+
+/* Card container */
+.woc-card {
+  background: var(--bg-card);
+  border-radius: 1.25rem;
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-card);
+}
+
+/* Little pill chips */
+.woc-pill,
+.woc-tag {
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  background: var(--pill-bg);
+  color: var(--pill-text);
+}
+
+/* ---------- COSMIC DARK (default) ---------- */
+
+.theme-cosmic {
+  --bg-root: #020617;        /* page background */
+  --bg-shell: radial-gradient(circle at top, #0f172a 0, #020617 60%);
+  --bg-card: rgba(15, 23, 42, 0.85);
+
+  --text-main: #e5e7eb;
+  --text-muted: #9ca3af;
+
+  --accent: #38bdf8;
+  --accent-soft: rgba(56, 189, 248, 0.18);
+
+  --pill-bg: rgba(15, 23, 42, 0.9);
+  --pill-text: #e5e7eb;
+
+  --border-subtle: rgba(148, 163, 184, 0.35);
+  --shadow-card: 0 18px 45px rgba(15, 23, 42, 0.8);
+}
+
+/* ---------- PROMO LIGHT (HIGH CONTRAST) ---------- */
+
+.theme-promo {
+  --bg-root: #f5f7ff;
+  --bg-shell: radial-gradient(circle at top, #eef2ff 0, #f9fafb 60%);
+  --bg-card: #ffffff;
+
+  --text-main: #020617;
+  --text-muted: #6b7280;
+
+  --accent: #4f46e5;
+  --accent-soft: rgba(79, 70, 229, 0.08);
+
+  --pill-bg: #e5e7ff;
+  --pill-text: #111827;
+
+  --border-subtle: rgba(148, 163, 184, 0.4);
+  --shadow-card: 0 18px 50px rgba(15, 23, 42, 0.12);
+}
+
+/* Optional: hero headline gradient changes between themes */
+.theme-cosmic .woc-hero-gradient {
+  background-image: linear-gradient(120deg, #38bdf8, #a855f7, #f97316);
+}
+
+.theme-promo .woc-hero-gradient {
+  background-image: linear-gradient(120deg, #4f46e5, #ec4899, #f97316);
+}
+
+/* Primary button */
+.woc-btn-primary {
+  border-radius: 999px;
+  padding: 0.6rem 1.4rem;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  background: var(--accent);
+  color: white;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.35);
+  transition:
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast),
+    background-color var(--transition-fast);
+}
+
+.woc-btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.45);
+}
+
+/* Ghost button */
+.woc-btn-ghost {
+  border-radius: 999px;
+  padding: 0.6rem 1.4rem;
+  font-weight: 500;
+  border: 1px solid var(--border-subtle);
+  background: var(--accent-soft);
+  color: var(--text-main);
+  backdrop-filter: blur(10px);
+}
+
+/* ---------- Animations ---------- */
+
+@keyframes woc-pulse {
+  0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.6); }
+  70% { transform: scale(1.06); box-shadow: 0 0 0 14px rgba(56, 189, 248, 0); }
+  100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(56, 189, 248, 0); }
+}
+
+.animate-woc-pulse {
+  animation: woc-pulse 2.4s infinite;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 260ms ease-out;
+}
+
+/* ---------- Mood overlays for WocTalks ---------- */
+
+.mood-battle {
+  box-shadow: 0 14px 30px rgba(248, 113, 113, 0.25);
+  border-color: rgba(248, 113, 113, 0.5);
+}
+
+.mood-battle .woc-tag,
+.mood-battle button.woc-btn-ghost {
+  background: rgba(248, 113, 113, 0.12);
+}
+
+.mood-playful {
+  box-shadow: 0 14px 30px rgba(168, 85, 247, 0.3);
+  border-color: rgba(168, 85, 247, 0.5);
+}
+
+.mood-story {
+  box-shadow: 0 14px 30px rgba(59, 130, 246, 0.25);
+}
+
+.mood-flustered {
+  box-shadow: 0 14px 30px rgba(244, 114, 182, 0.3);
+}
+
+.mood-omen {
+  box-shadow: 0 16px 36px rgba(109, 40, 217, 0.4);
+  border-color: rgba(109, 40, 217, 0.7);
+}
+
+/* ---------- Mood-driven accent tweaks ---------- */
+
+body[data-woc-mood='battle'] {
+  --accent: #fb7185;
+  --accent-soft: rgba(251, 113, 133, 0.16);
+}
+
+body[data-woc-mood='playful'] {
+  --accent: #22c55e;
+  --accent-soft: rgba(34, 197, 94, 0.18);
+}
+
+body[data-woc-mood='story'] {
+  --accent: #a855f7;
+  --accent-soft: rgba(168, 85, 247, 0.16);
+}
+
+body[data-woc-mood='omen'] {
+  --accent: #f97316;
+  --accent-soft: rgba(249, 115, 22, 0.18);
+}
+
+body[data-woc-mood='flustered'] {
+  --accent: #ec4899;
+  --accent-soft: rgba(236, 72, 153, 0.18);
+}
+
+/* Background tints based on mood */
+body[data-woc-mood='battle'] .woc-shell {
+  background-image: radial-gradient(circle at top, #1e293b 0, #020617 65%);
+}
+body[data-woc-mood='playful'] .woc-shell {
+  background-image: radial-gradient(circle at top, #022c22 0, #020617 65%);
+}
+body[data-woc-mood='story'] .woc-shell {
+  background-image: radial-gradient(circle at top, #111827 0, #020617 65%);
+}
+body[data-woc-mood='omen'] .woc-shell {
+  background-image: radial-gradient(circle at top, #0b1120 0, #020617 65%);
+}
+
+/* ---------- Animations ---------- */
+@keyframes wocPulse {
+  0% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.06); opacity: 1; }
+  100% { transform: scale(1); opacity: 0.9; }
+}
+
+@keyframes wocFloat {
+  0% { transform: translateY(0px); }
+  50% { transform: translateY(-4px); }
+  100% { transform: translateY(0px); }
+}
+
+@keyframes wocPop {
+  0% { transform: scale(0.9) translateY(10px); opacity: 0; }
+  100% { transform: scale(1) translateY(0px); opacity: 1; }
+}
+
+.animate-woc-pulse { animation: wocPulse 2.4s ease-in-out infinite; }
+.animate-woc-float { animation: wocFloat 3.5s ease-in-out infinite; }
+.animate-woc-pop { animation: wocPop 0.25s ease-out; }
+
+/* Intro modal container */
+.woc-intro-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: radial-gradient(circle at top, rgba(15,23,42,0.9), rgba(2,6,23,0.98));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+.woc-intro-dialog {
+  max-width: 420px;
+  width: 100%;
+  border-radius: 1rem;
+  background: rgba(15, 23, 42, 0.96);
+  border: 1px solid var(--border-subtle);
+  box-shadow: 0 24px 80px rgba(0,0,0,0.8);
+  padding: 1.25rem 1.4rem;
+}
+
+/* -------------------------------------------------
+   WOC mood system
+   body[data-woc-mood="…"] is set by WocThemeProvider
+   ------------------------------------------------- */
+
+@keyframes woc-pulse {
+  0% { transform: translateY(0); box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.35); }
+  50% { transform: translateY(-2px); box-shadow: 0 0 30px 0 rgba(56, 189, 248, 0.5); }
+  100% { transform: translateY(0); box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.0); }
+}
+
+@keyframes woc-breath {
+  0% { transform: translateY(0px); }
+  50% { transform: translateY(-4px); }
+  100% { transform: translateY(0px); }
+}
+
+@keyframes woc-glitch {
+  0% { transform: translate(0); }
+  20% { transform: translate(-1px, 1px); }
+  40% { transform: translate(1px, -1px); }
+  60% { transform: translate(-1px, -1px); }
+  80% { transform: translate(1px, 1px); }
+  100% { transform: translate(0); }
+}
+
+/* Neutral: default look */
+body[data-woc-mood="neutral"] .woc-shell {
+  filter: none;
+}
+
+/* Battle = exam / duel hype */
+body[data-woc-mood="battle"] .woc-shell {
+  background: radial-gradient(circle at top, #0f172a 0, #020617 55%);
+}
+body[data-woc-mood="battle"] .woc-hero-card {
+  animation: woc-pulse 1.6s infinite;
+  border-color: rgba(248, 113, 113, 0.7);
+}
+
+/* Playful = marriage, fun, goofy stuff */
+body[data-woc-mood="playful"] .woc-shell {
+  background: radial-gradient(circle at top, #0f172a 0, #111827 40%, #020617 85%);
+}
+body[data-woc-mood="playful"] .woc-hero-card {
+  animation: woc-breath 2.4s ease-in-out infinite;
+  border-color: rgba(251, 191, 36, 0.8);
+}
+
+/* Story = lore/tutorial moments */
+body[data-woc-mood="story"] .woc-shell {
+  background: radial-gradient(circle at top, #111827 0, #020617 60%);
+  filter: saturate(1.1);
+}
+
+/* Omen = world events / danger */
+body[data-woc-mood="omen"] .woc-shell {
+  background: radial-gradient(circle at top, #020617 0, #111827 40%, #020617 90%);
+  filter: hue-rotate(-12deg) contrast(1.05);
+}
+body[data-woc-mood="omen"] .woc-hero-card {
+  animation: woc-glitch 0.24s steps(2, end) infinite;
+  border-color: rgba(248, 113, 113, 0.85);
+}
+
+/* Flustered = fails / awkward moments */
+body[data-woc-mood="flustered"] .woc-shell {
+  filter: hue-rotate(18deg) saturate(1.15);
+}
+body[data-woc-mood="flustered"] .woc-hero-card {
+  animation: woc-breath 1.4s ease-in-out infinite;
+  border-color: rgba(244, 114, 182, 0.85);
+}
+
+/* ---------- Mood states (driven by WocThemeProvider) ---------- */
+
+/* Base cards wiggle very slightly when excited */
+[data-woc-mood='excited'] .woc-hero-card {
+  transform: translateY(-2px) scale(1.01);
+  box-shadow: 0 24px 60px rgba(56, 189, 248, 0.45);
+}
+
+/* Calm = softer glow */
+[data-woc-mood='calm'] .woc-hero-card {
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.6);
+  filter: saturate(0.95);
+}
+
+/* Annoyed = slight shake + warmer tint */
+[data-woc-mood='annoyed'] .woc-hero-card {
+  animation: woc-shake 260ms ease-in-out;
+  box-shadow: 0 22px 55px rgba(248, 113, 113, 0.45);
+}
+
+/* Panic = pulsing border */
+[data-woc-mood='panic'] .woc-hero-card {
+  animation: woc-pulse 900ms ease-in-out infinite;
+}
+
+/* Shake keyframes */
+@keyframes woc-shake {
+  0% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-3px);
+  }
+  50% {
+    transform: translateX(2px);
+  }
+  75% {
+    transform: translateX(-2px);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+/* Pulse keyframes */
+@keyframes woc-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(248, 250, 252, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(248, 250, 252, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(248, 250, 252, 0);
+  }
+}
+
+/* Tiny pulsing dot used in the navbar mood chip */
+.woc-pulse-dot {
+  animation: wocPulse 2.4s ease-in-out infinite;
+}
