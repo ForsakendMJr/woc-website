@@ -402,3 +402,143 @@ body[data-woc-mood="flustered"] .woc-hero-card {
 .woc-pulse-dot {
   animation: wocPulse 2.4s ease-in-out infinite;
 }
+
+/* -------------------------------------------------
+   WoC Avatar – mood-reactive animations & colors
+   Requires body[data-woc-mood="…"] from WocThemeProvider
+   ------------------------------------------------- */
+
+/* Base avatar state */
+.woc-avatar {
+  transition:
+    transform 200ms ease-out,
+    box-shadow 220ms ease-out,
+    border-color 220ms ease-out,
+    filter 200ms ease-out;
+}
+
+/* Base ring */
+.woc-avatar-ring {
+  transition:
+    box-shadow 220ms ease-out,
+    border-color 220ms ease-out,
+    opacity 200ms ease-out,
+    ring-color 200ms ease-out;
+}
+
+/* Keyframes specifically for avatar */
+@keyframes avatarPulse {
+  0% {
+    transform: translateY(0) scale(1);
+    box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.5);
+  }
+  60% {
+    transform: translateY(-1px) scale(1.04);
+    box-shadow: 0 0 20px 8px rgba(248, 113, 113, 0);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    box-shadow: 0 0 0 0 rgba(248, 113, 113, 0);
+  }
+}
+
+@keyframes avatarBreath {
+  0% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2px);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+@keyframes avatarGlitch {
+  0% {
+    transform: translate(0, 0);
+  }
+  20% {
+    transform: translate(-1px, 1px);
+  }
+  40% {
+    transform: translate(1px, -1px);
+  }
+  60% {
+    transform: translate(-1px, -1px);
+  }
+  80% {
+    transform: translate(1px, 1px);
+  }
+  100% {
+    transform: translate(0, 0);
+  }
+}
+
+@keyframes avatarBlush {
+  0% {
+    filter: saturate(1) hue-rotate(0deg);
+  }
+  50% {
+    filter: saturate(1.15) hue-rotate(10deg);
+  }
+  100% {
+    filter: saturate(1) hue-rotate(0deg);
+  }
+}
+
+/* Neutral / default */
+body[data-woc-mood="neutral"] .woc-avatar {
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.7);
+}
+
+/* Battle – exam / duel hype */
+body[data-woc-mood="battle"] .woc-avatar {
+  animation: avatarPulse 1.3s ease-out infinite;
+  border-color: rgba(248, 113, 113, 0.8);
+  box-shadow: 0 18px 40px rgba(248, 113, 113, 0.5);
+}
+body[data-woc-mood="battle"] .woc-avatar-ring {
+  box-shadow: 0 0 26px rgba(248, 113, 113, 0.9);
+}
+
+/* Playful – marriage, goofy fun */
+body[data-woc-mood="playful"] .woc-avatar {
+  animation: avatarBreath 2.1s ease-in-out infinite;
+  border-color: rgba(251, 191, 36, 0.9);
+  box-shadow: 0 18px 40px rgba(251, 191, 36, 0.55);
+}
+body[data-woc-mood="playful"] .woc-avatar-ring {
+  box-shadow: 0 0 24px rgba(251, 191, 36, 0.9);
+}
+
+/* Story – lore / tutorial moments */
+body[data-woc-mood="story"] .woc-avatar {
+  filter: saturate(1.1);
+  box-shadow: 0 16px 35px rgba(59, 130, 246, 0.45);
+  border-color: rgba(59, 130, 246, 0.85);
+}
+body[data-woc-mood="story"] .woc-avatar-ring {
+  box-shadow: 0 0 24px rgba(59, 130, 246, 0.9);
+}
+
+/* Omen – world events / danger */
+body[data-woc-mood="omen"] .woc-avatar {
+  animation: avatarGlitch 0.22s steps(2, end) infinite;
+  filter: hue-rotate(-12deg) contrast(1.08);
+  border-color: rgba(129, 140, 248, 0.95);
+  box-shadow: 0 20px 50px rgba(129, 140, 248, 0.6);
+}
+body[data-woc-mood="omen"] .woc-avatar-ring {
+  box-shadow: 0 0 30px rgba(129, 140, 248, 1);
+}
+
+/* Flustered – fails / awkward moments */
+body[data-woc-mood="flustered"] .woc-avatar {
+  animation: avatarBlush 1.4s ease-in-out infinite;
+  border-color: rgba(244, 114, 182, 0.95);
+  box-shadow: 0 18px 42px rgba(244, 114, 182, 0.65);
+}
+body[data-woc-mood="flustered"] .woc-avatar-ring {
+  box-shadow: 0 0 26px rgba(244, 114, 182, 1);
+}

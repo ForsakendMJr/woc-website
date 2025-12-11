@@ -1,8 +1,9 @@
 // app/components/Navbar.jsx
-'use client';
+"use client";
 
-import Link from 'next/link';
-import ThemeToggle from './ThemeToggle';
+import Link from "next/link";
+import Image from "next/image";
+import ThemeToggle from "./ThemeToggle";
 
 export default function Navbar() {
   return (
@@ -10,32 +11,41 @@ export default function Navbar() {
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
         {/* Left: Avatar + title */}
         <div className="flex items-center gap-3">
-          {/* WoC avatar logo */}
+          {/* WoC avatar logo – mood reactive */}
           <div
             className="
-              relative h-11 w-11 rounded-full overflow-hidden 
-              shadow-xl border border-[var(--border-subtle)]
-              bg-[var(--bg-card)] animate-woc-float
+              woc-avatar
+              relative h-11 w-11 rounded-full overflow-hidden
+              shadow-lg border border-[var(--border-subtle)]
+              bg-[var(--bg-card)]
             "
           >
-            <img
+            <Image
               src="/woc-avatar.png"
               alt="WoC avatar"
-              className="h-full w-full object-cover"
-              style={{ objectPosition: '20% 20%' }} // focuses on face/torso
+              fill
+              sizes="44px"
+              priority
+              className="
+                object-cover 
+                object-[38%_48%]      /* tuned to your art so face sits centered */
+                pointer-events-none
+              "
             />
 
-            {/* Glow ring */}
+            {/* Glow ring – color shifts with mood */}
             <span
               className="
+                woc-avatar-ring
                 pointer-events-none absolute inset-0 rounded-full 
                 ring-2 ring-[var(--accent)] ring-offset-[3px] 
-                ring-offset-[var(--bg-root)] opacity-90
-                transition-all duration-300
+                ring-offset-[var(--bg-root)]
+                opacity-90
               "
             />
           </div>
 
+          {/* Name + subtitle */}
           <div className="leading-tight">
             <div className="text-sm font-semibold tracking-wide">
               World of Communities
@@ -54,18 +64,21 @@ export default function Navbar() {
           >
             Overview
           </Link>
+
           <Link
             href="/commands"
             className="text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors"
           >
             Commands
           </Link>
+
           <Link
             href="/docs"
             className="text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors"
           >
             Docs
           </Link>
+
           <span className="inline-flex items-center gap-1 text-[var(--text-muted)] text-xs px-2 py-1 rounded-full bg-[color-mix(in_oklab,var(--bg-card)_75%,transparent)] border border-[var(--border-subtle)]/60">
             <span>Dashboard</span>
             <span className="text-[0.7rem] uppercase tracking-[0.16em]">
@@ -79,7 +92,7 @@ export default function Navbar() {
           <ThemeToggle />
 
           <a
-            href="https://discord.com/oauth2/authorize" // your actual invite
+            href="https://discord.com/oauth2/authorize" // swap with your real invite
             target="_blank"
             rel="noreferrer"
             className="hidden sm:inline-flex items-center gap-2 text-xs sm:text-sm woc-btn-primary"
