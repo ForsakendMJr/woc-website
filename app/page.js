@@ -1,7 +1,7 @@
 // app/page.js
 import WocIntroModal from './components/WocIntroModal';
 import WocTalks from './components/WocTalks';
-import Image from "next/image";
+import Image from 'next/image';
 
 export default function HomePage() {
   return (
@@ -11,7 +11,6 @@ export default function HomePage() {
 
       {/* Hero row */}
       <section className="grid lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1.2fr)] gap-10 items-start">
-        
         {/* ---------------- LEFT SIDE ---------------- */}
         <div className="space-y-6">
           <div className="inline-flex items-center gap-2 woc-pill text-xs mb-3">
@@ -59,7 +58,9 @@ export default function HomePage() {
               </div>
               <div className="flex flex-wrap gap-2">
                 {['Clans', 'Duels', 'Exams', 'Marriage', 'Economy'].map(t => (
-                  <span key={t} className="woc-tag">{t}</span>
+                  <span key={t} className="woc-tag">
+                    {t}
+                  </span>
                 ))}
               </div>
             </div>
@@ -99,8 +100,7 @@ export default function HomePage() {
           </div>
 
           <div className="space-y-3 text-xs sm:text-[0.78rem]">
-            
-            {/* >>> FIXED AVATAR SECTION <<< */}
+            {/* Avatar + line */}
             <div className="flex items-center gap-2">
               <div
                 className="
@@ -117,7 +117,7 @@ export default function HomePage() {
                   className="
                     object-cover
                     scale-[1.8]
-                    object-[26%_40%]      /* same perfect face framing as navbar */
+                    object-[18%_38%]   /* same face framing vibes as navbar */
                     pointer-events-none
                   "
                 />
@@ -171,7 +171,6 @@ export default function HomePage() {
         </h2>
 
         <div className="grid lg:grid-cols-2 gap-6">
-          
           <article className="woc-card p-5 sm:p-6 hover:-translate-y-1 hover:shadow-2xl transition transform-gpu">
             <h3 className="font-semibold mb-2 text-sm sm:text-base">
               Living Clan System
@@ -182,7 +181,9 @@ export default function HomePage() {
             </p>
             <div className="flex flex-wrap gap-2 text-xs">
               {['Clan exams', 'Power scaling', 'Cross-clan duels'].map(t => (
-                <span key={t} className="woc-tag">{t}</span>
+                <span key={t} className="woc-tag">
+                  {t}
+                </span>
               ))}
             </div>
           </article>
@@ -197,7 +198,9 @@ export default function HomePage() {
             </p>
             <div className="flex flex-wrap gap-2 text-xs">
               {['Dual currency', 'Item rarity', 'Future dashboard'].map(t => (
-                <span key={t} className="woc-tag">{t}</span>
+                <span key={t} className="woc-tag">
+                  {t}
+                </span>
               ))}
             </div>
           </article>
@@ -212,7 +215,9 @@ export default function HomePage() {
             </p>
             <div className="flex flex-wrap gap-2 text-xs">
               {['Global marriage', 'Family trees', 'Social stats'].map(t => (
-                <span key={t} className="woc-tag">{t}</span>
+                <span key={t} className="woc-tag">
+                  {t}
+                </span>
               ))}
             </div>
           </article>
@@ -227,7 +232,9 @@ export default function HomePage() {
             </p>
             <div className="flex flex-wrap gap-2 text-xs">
               {['Realm buffs', 'Decor items', 'Clan HQs (soon)'].map(t => (
-                <span key={t} className="woc-tag">{t}</span>
+                <span key={t} className="woc-tag">
+                  {t}
+                </span>
               ))}
             </div>
           </article>

@@ -28,11 +28,13 @@ export default function Navbar() {
               priority
               className="
                 object-cover
-                scale-[1.8]
-                object-[26%_40%]      /* tuned so the face sits nicely */
+                object-[18%_38%]   /* focus left + a bit up so face is centered */
+                scale-[1.7]        /* zoom in to make the face fill the circle */
                 pointer-events-none
               "
             />
+
+            {/* Glow ring – color shifts with theme/mood */}
             <span
               className="
                 woc-avatar-ring
@@ -77,7 +79,6 @@ export default function Navbar() {
             Docs
           </Link>
 
-          {/* NEW: Vote page */}
           <Link
             href="/vote"
             className="text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors"
@@ -97,7 +98,7 @@ export default function Navbar() {
         <div className="flex items-center gap-3">
           <ThemeToggle />
 
-          {/* Small “Vote” pill on the right (mobile-friendly) */}
+          {/* Small Vote pill */}
           <Link
             href="/vote"
             className="inline-flex items-center gap-1 text-xs px-3 py-1 rounded-full border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] text-[var(--text-main)] hover:-translate-y-[1px] transition-transform"
