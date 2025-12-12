@@ -1,6 +1,7 @@
 // app/page.js
 import WocIntroModal from './components/WocIntroModal';
 import WocTalks from './components/WocTalks';
+import Image from "next/image";
 
 export default function HomePage() {
   return (
@@ -10,7 +11,8 @@ export default function HomePage() {
 
       {/* Hero row */}
       <section className="grid lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1.2fr)] gap-10 items-start">
-        {/* Left: headline + CTA */}
+        
+        {/* ---------------- LEFT SIDE ---------------- */}
         <div className="space-y-6">
           <div className="inline-flex items-center gap-2 woc-pill text-xs mb-3">
             <span className="h-2 w-2 rounded-full bg-emerald-400 woc-pulse-dot" />
@@ -57,9 +59,7 @@ export default function HomePage() {
               </div>
               <div className="flex flex-wrap gap-2">
                 {['Clans', 'Duels', 'Exams', 'Marriage', 'Economy'].map(t => (
-                  <span key={t} className="woc-tag">
-                    {t}
-                  </span>
+                  <span key={t} className="woc-tag">{t}</span>
                 ))}
               </div>
             </div>
@@ -75,16 +75,17 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* Right: live preview card */}
-<div
-  className="woc-card woc-hero-card p-4 sm:p-5 border border-[var(--border-subtle)]/50 
+        {/* ---------------- RIGHT: LIVE PREVIEW CARD ---------------- */}
+        <div
+          className="woc-card woc-hero-card p-4 sm:p-5 border border-[var(--border-subtle)]/50 
                      transform-gpu transition duration-300 hover:-translate-y-1 hover:shadow-2xl"
->
+        >
           <div className="flex items-center justify-between mb-3">
             <div className="inline-flex items-center gap-2 text-xs">
               <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_0_4px_rgba(16,185,129,0.25)]" />
               <span className="font-medium tracking-wide">Live preview</span>
             </div>
+
             <div className="flex gap-1 text-[0.7rem] text-[var(--text-muted)]">
               {['/duel', '/marry', '/exam', '/tutorial'].map(cmd => (
                 <span
@@ -98,29 +99,30 @@ export default function HomePage() {
           </div>
 
           <div className="space-y-3 text-xs sm:text-[0.78rem]">
+            
+            {/* >>> FIXED AVATAR SECTION <<< */}
             <div className="flex items-center gap-2">
               <div
-    className="
-      relative h-7 w-7 rounded-full overflow-hidden 
-      shadow-md border border-[var(--border-subtle)]
-      bg-[var(--bg-card)]
-    "
-  >
-    <img
-      src="/woc-avatar.png"
-      alt="WoC avatar"
-      className="h-full w-full object-cover"
-      style={{ objectPosition: '18% 20%' }}
-    />
-  </div>
+                className="
+                  relative h-7 w-7 rounded-full overflow-hidden
+                  shadow-md border border-[var(--border-subtle)]
+                  bg-[var(--bg-card)]
+                "
+              >
+                <Image
+                  src="/woc-avatar.png"
+                  alt="WoC avatar"
+                  fill
+                  sizes="28px"
+                  className="
+                    object-cover
+                    scale-[1.8]
+                    object-[26%_40%]      /* same perfect face framing as navbar */
+                    pointer-events-none
+                  "
+                />
+              </div>
 
-  <div className="text-[var(--text-muted)]">
-    <span className="font-semibold text-[var(--text-main)]">
-      @Mythralight
-    </span>{' '}
-    defeats <span className="font-semibold">@Umbrarealm</span> in a
-    cross-clan duel. Power, coins and exam progress updated.
-  </div>
               <div className="text-[var(--text-muted)]">
                 <span className="font-semibold text-[var(--text-main)]">
                   @Mythralight
@@ -141,6 +143,7 @@ export default function HomePage() {
                   your clan title.
                 </span>
               </li>
+
               <li className="text-[var(--text-muted)]">
                 <span className="text-emerald-400 mr-1">•</span>
                 <span>
@@ -168,74 +171,63 @@ export default function HomePage() {
         </h2>
 
         <div className="grid lg:grid-cols-2 gap-6">
-          {/* Card 1 */}
+          
           <article className="woc-card p-5 sm:p-6 hover:-translate-y-1 hover:shadow-2xl transition transform-gpu">
             <h3 className="font-semibold mb-2 text-sm sm:text-base">
               Living Clan System
             </h3>
-            <p className="text-[0.85rem] text-[var(--text-muted)] mb-4">
+            <p className="text-[var(--text-muted)] mb-4 text-[0.85rem]">
               Nine lore-heavy clans with exams, duels, and cross-server
               prestige. Every fight nudges the story.
             </p>
             <div className="flex flex-wrap gap-2 text-xs">
               {['Clan exams', 'Power scaling', 'Cross-clan duels'].map(t => (
-                <span key={t} className="woc-tag">
-                  {t}
-                </span>
+                <span key={t} className="woc-tag">{t}</span>
               ))}
             </div>
           </article>
 
-          {/* Card 2 */}
           <article className="woc-card p-5 sm:p-6 hover:-translate-y-1 hover:shadow-2xl transition transform-gpu">
             <h3 className="font-semibold mb-2 text-sm sm:text-base">
               Economy, Crafting & Items
             </h3>
-            <p className="text-[0.85rem] text-[var(--text-muted)] mb-4">
+            <p className="text-[var(--text-muted)] mb-4 text-[0.85rem]">
               WoC Coins, community coins, weapons, artifacts and fruits—plus
               advanced crafting and future alchemy hooks.
             </p>
             <div className="flex flex-wrap gap-2 text-xs">
               {['Dual currency', 'Item rarity', 'Future dashboard'].map(t => (
-                <span key={t} className="woc-tag">
-                  {t}
-                </span>
+                <span key={t} className="woc-tag">{t}</span>
               ))}
             </div>
           </article>
 
-          {/* Card 3 */}
           <article className="woc-card p-5 sm:p-6 hover:-translate-y-1 hover:shadow-2xl transition transform-gpu">
             <h3 className="font-semibold mb-2 text-sm sm:text-base">
               Marriage, Family & Social Webs
             </h3>
-            <p className="text-[0.85rem] text-[var(--text-muted)] mb-4">
+            <p className="text-[var(--text-muted)] mb-4 text-[0.85rem]">
               Adopt players, build bloodlines, generate family trees and
               gossip-fuelled drama that never ends.
             </p>
             <div className="flex flex-wrap gap-2 text-xs">
               {['Global marriage', 'Family trees', 'Social stats'].map(t => (
-                <span key={t} className="woc-tag">
-                  {t}
-                </span>
+                <span key={t} className="woc-tag">{t}</span>
               ))}
             </div>
           </article>
 
-          {/* Card 4 */}
           <article className="woc-card p-5 sm:p-6 hover:-translate-y-1 hover:shadow-2xl transition transform-gpu">
             <h3 className="font-semibold mb-2 text-sm sm:text-base">
               Housing & Realms
             </h3>
-            <p className="text-[0.85rem] text-[var(--text-muted)] mb-4">
+            <p className="text-[var(--text-muted)] mb-4 text-[0.85rem]">
               Player housing, future clan HQs and visual prestige tied directly
               into combat buffs and duels.
             </p>
             <div className="flex flex-wrap gap-2 text-xs">
               {['Realm buffs', 'Decor items', 'Clan HQs (soon)'].map(t => (
-                <span key={t} className="woc-tag">
-                  {t}
-                </span>
+                <span key={t} className="woc-tag">{t}</span>
               ))}
             </div>
           </article>

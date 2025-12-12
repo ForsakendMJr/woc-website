@@ -9,40 +9,39 @@ export default function Navbar() {
   return (
     <header className="sticky top-0 z-40 border-b border-[var(--border-subtle)]/40 bg-[color-mix(in_oklab,var(--bg-root)_80%,transparent)] backdrop-blur-xl">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
-
         {/* Left: Avatar + title */}
         <div className="flex items-center gap-3">
-
-          {/* WOC Avatar */}
+          {/* WoC avatar logo – tuned for your art */}
           <div
             className="
               woc-avatar
-              relative h-11 w-11 
-              rounded-full overflow-hidden
-              border border-[var(--border-subtle)]
-              shadow-lg bg-[var(--bg-card)]
+              relative h-11 w-11 rounded-full overflow-hidden
+              shadow-lg border border-[var(--border-subtle)]
+              bg-[var(--bg-card)]
             "
           >
             <Image
               src="/woc-avatar.png"
-              alt="WOC Avatar"
+              alt="WoC avatar"
               fill
+              sizes="44px"
               priority
-              sizes="48px"
               className="
                 object-cover
-                object-[38%_48%]   /* shift right + down so face is centered */
-                scale-[1.28]       /* zoom slightly so face fills circle */
+                scale-[1.6]           /* zoom in so the face fills the circle */
+                object-[26%_40%]      /* bias toward left / slightly up = face center */
                 pointer-events-none
               "
             />
 
-            {/* Glow ring that reacts to theme */}
+            {/* Glow ring – color shifts with mood */}
             <span
               className="
-                absolute inset-0 rounded-full pointer-events-none
-                ring-2 ring-[var(--accent)] ring-offset-[3px]
+                woc-avatar-ring
+                pointer-events-none absolute inset-0 rounded-full 
+                ring-2 ring-[var(--accent)] ring-offset-[3px] 
                 ring-offset-[var(--bg-root)]
+                opacity-90
               "
             />
           </div>
@@ -58,7 +57,7 @@ export default function Navbar() {
           </div>
         </div>
 
-        {/* Center navigation */}
+        {/* Center: nav links */}
         <nav className="hidden md:flex items-center gap-6 text-sm">
           <Link
             href="/"
@@ -89,12 +88,12 @@ export default function Navbar() {
           </span>
         </nav>
 
-        {/* Right controls */}
+        {/* Right: theme + CTA */}
         <div className="flex items-center gap-3">
           <ThemeToggle />
 
           <a
-            href="https://discord.com/oauth2/authorize"
+            href="https://discord.com/oauth2/authorize" // swap with your real invite
             target="_blank"
             rel="noreferrer"
             className="hidden sm:inline-flex items-center gap-2 text-xs sm:text-sm woc-btn-primary"
