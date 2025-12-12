@@ -1,11 +1,13 @@
+// app/WocThemeProvider.jsx
 'use client';
 
 import { createContext, useContext, useEffect, useState } from 'react';
 
 const DEFAULT_THEME = 'cosmic'; // 'cosmic' or 'promo'
 
-// Use the mood names you already use in globals.css
-const MOODS = ['battle', 'playful', 'story', 'omen', 'flustered'];
+// Include the moods you wired into globals.css
+// plus a neutral baseline
+const MOODS = ['neutral', 'battle', 'playful', 'story', 'omen', 'flustered'];
 const DEFAULT_MOOD = 'story';
 
 const WocThemeContext = createContext(null);
@@ -33,7 +35,7 @@ export function WocThemeProvider({ children }) {
     }
   }, []);
 
-  // Sync theme + mood to DOM
+  // Sync theme + mood to DOM & persist
   useEffect(() => {
     if (typeof document === 'undefined') return;
 
@@ -64,6 +66,7 @@ export function WocThemeProvider({ children }) {
   const cycleMood = () => {
     setMood(prev => {
       const idx = MOODS.indexOf(prev);
+      if (idx === -1) return DEFAULT_MOOD;
       return MOODS[(idx + 1) % MOODS.length];
     });
   };

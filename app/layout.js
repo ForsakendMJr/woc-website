@@ -12,8 +12,9 @@ export const metadata = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en">
-      <body className="min-h-screen">
+    <html lang="en" className="theme-cosmic">
+      {/* data-woc-mood is set/updated by WocThemeProvider on the client */}
+      <body className="min-h-screen" data-woc-mood="story">
         <WocThemeProvider>
           <Navbar />
           <main className="woc-shell min-h-[calc(100vh-3.5rem)]">
