@@ -1,70 +1,71 @@
-import PageHeader from '../components/PageHeader';
+import { getServerSession } from "next-auth";
+import { authOptions } from "../api/auth/[...nextauth]/route";
+import Link from "next/link";
 
-const PANELS = [
-  {
-    title: 'Live server stats',
-    lines: [
-      'Online clans, active players, duel heatmaps and exam clears.',
-      'Quickly see which systems are thriving and which need events.',
-    ],
-  },
-  {
-    title: 'Season tools',
-    lines: [
-      'Rotate featured clans, tweak rewards, and schedule WoC-wide events.',
-      'Think “battle pass tuning”, but for your Discord arc.',
-    ],
-  },
-  {
-    title: 'Economy inspector',
-    lines: [
-      'Track inflation, crate drops and item rarity distribution.',
-      'Helps you keep your server’s meta spicy, not broken.',
-    ],
-  },
-];
+export default async function DashboardPage() {
+  const session = await getServerSession(authOptions);
 
-export default function DashboardPage() {
+  if (!session) {
+    return (
+      <div className="max-w-3xl mx-auto px-6 py-16">
+        <div className="woc-card p-6">
+          <h1 className="text-xl font-semibold mb-2">Dashboard</h1>
+          <p className="text-[var(--text-muted)] mb-4">
+            You need to log in with Discord to continue.
+          </p>
+          <Link className="woc-btn-primary inline-flex" href="/signin">
+            Sign in with Discord
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  // For now we assume "not invited yet" (later we’ll detect via bot API + guilds)
+  const hasInvitedBot = false;
+
   return (
-    <div className="max-w-5xl mx-auto px-6 lg:px-8 py-16 lg:py-20">
-      <PageHeader
-        eyebrow="Owner tools • Coming soon"
-        title="Dashboard"
-        kicker="A web dashboard for owners to see what their server’s story looks like at a glance – and gently steer it."
-        badges={['Coming soon', 'Season tools']}
-      >
-        <p>
-          The dashboard isn’t live yet, but the plan is simple: give you just
-          enough control to shape arcs and events without drowning you in
-          toggles. Until then, everything still works 100% inside Discord.
+    <div className="max-w-6xl mx-auto px-6 py-12 space-y-6">
+      <div className="woc-card p-6">
+        <h1 className="text-2xl font-semibold">Welcome, {session.discord?.username} 👋</h1>
+        <p className="text-[var(--text-muted)]">
+          This dashboard will become your control room: voting, rewards, cosmetics, and server setup.
         </p>
-      </PageHeader>
-
-      <div className="grid md:grid-cols-3 gap-4">
-        {PANELS.map((panel) => (
-          <article
-            key={panel.title}
-            className="woc-card p-4 text-sm text-[var(--text-muted)]"
-          >
-            <h2 className="font-semibold text-[var(--text-main)] mb-2">
-              {panel.title}
-            </h2>
-            <ul className="space-y-1">
-              {panel.lines.map((l, i) => (
-                <li key={i} className="flex gap-2">
-                  <span className="mt-[6px] h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                  <span>{l}</span>
-                </li>
-              ))}
-            </ul>
-          </article>
-        ))}
       </div>
 
-      <div className="mt-8 woc-card p-4 text-xs sm:text-sm text-[var(--text-muted)]">
-        Want to influence dashboard features? Host WoC in your server and share
-        feedback in our support server once that goes live – early adopters will
-        basically help design the control room.
+      {!hasInvitedBot && (
+        <div className="woc-card p-6 border border-[var(--border-subtle)]/60">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <div className="text-sm font-semibold">
+                Before you continue… invite WoC to a server
+              </div>
+              <p className="text-[0.85rem] text-[var(--text-muted)] mt-1">
+                You can browse, but to earn vote currency and unlock features, WoC must be in at least one server you manage.
+              </p>
+            </div>
+
+            <a
+              className="woc-btn-primary inline-flex justify-center"
+              target="_blank"
+              rel="noreferrer"
+              href="https://discord.com/oauth2/authorize?client_id=YOUR_BOT_CLIENT_ID&scope=bot%20applications.commands&permissions=0"
+            >
+              Invite WoC ➕
+            </a>
+          </div>
+
+          <div className="mt-4 text-xs text-[var(--text-muted)]">
+            Tip: once you’ve invited WoC, refresh this page.
+          </div>
+        </div>
+      )}
+
+      <div className="woc-card p-6">
+        <h2 className="text-lg font-semibold mb-2">Voting</h2>
+        <p className="text-[var(--text-muted)] text-sm">
+          Coming next: connect top.gg + discordbotlist voting, track your streak, and claim WoC Coins.
+        </p>
       </div>
     </div>
   );
