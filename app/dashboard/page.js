@@ -1,71 +1,101 @@
-import { getServerSession } from "next-auth";
-import { authOptions } from "../api/auth/[...nextauth]/route";
+// app/dashboard/page.js
+"use client";
+
+import { signIn, useSession } from "next-auth/react";
 import Link from "next/link";
 
-export default async function DashboardPage() {
-  const session = await getServerSession(authOptions);
-
-  if (!session) {
-    return (
-      <div className="max-w-3xl mx-auto px-6 py-16">
-        <div className="woc-card p-6">
-          <h1 className="text-xl font-semibold mb-2">Dashboard</h1>
-          <p className="text-[var(--text-muted)] mb-4">
-            You need to log in with Discord to continue.
-          </p>
-          <Link className="woc-btn-primary inline-flex" href="/signin">
-            Sign in with Discord
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
-  // For now we assume "not invited yet" (later we’ll detect via bot API + guilds)
-  const hasInvitedBot = false;
+export default function DashboardPage() {
+  const { data: session, status } = useSession();
+  const loading = status === "loading";
+  const authed = !!session?.user;
 
   return (
-    <div className="max-w-6xl mx-auto px-6 py-12 space-y-6">
-      <div className="woc-card p-6">
-        <h1 className="text-2xl font-semibold">Welcome, {session.discord?.username} 👋</h1>
-        <p className="text-[var(--text-muted)]">
-          This dashboard will become your control room: voting, rewards, cosmetics, and server setup.
+    <div className="max-w-6xl mx-auto px-6 lg:px-8 py-14">
+      <div className="woc-card p-6 sm:p-8">
+        <h1 className="text-2xl sm:text-3xl font-bold">Dashboard</h1>
+        <p className="mt-2 text-sm text-[var(--text-muted)] max-w-2xl">
+          Track votes, rewards, and your server progress. WoC doesn’t hand out coins
+          for free, it makes you earn them with style.
         </p>
-      </div>
 
-      {!hasInvitedBot && (
-        <div className="woc-card p-6 border border-[var(--border-subtle)]/60">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div>
-              <div className="text-sm font-semibold">
-                Before you continue… invite WoC to a server
-              </div>
-              <p className="text-[0.85rem] text-[var(--text-muted)] mt-1">
-                You can browse, but to earn vote currency and unlock features, WoC must be in at least one server you manage.
+        {loading ? (
+          <div className="mt-8 text-sm text-[var(--text-muted)]">
+            Loading your portal…
+          </div>
+        ) : !authed ? (
+          <div className="mt-8 grid gap-4 sm:grid-cols-2">
+            {/* Invite first */}
+            <div className="woc-card p-5">
+              <h2 className="font-semibold">Step 1: Invite WoC</h2>
+              <p className="mt-1 text-sm text-[var(--text-muted)]">
+                Recommended first. Invite the bot to your server so the dashboard can
+                actually show something meaningful.
               </p>
+
+              <a
+                className="mt-4 inline-flex w-full justify-center items-center gap-2 woc-btn-primary"
+                href="https://discord.com/oauth2/authorize"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Add WoC to Discord <span className="text-base">➕</span>
+              </a>
             </div>
 
-            <a
-              className="woc-btn-primary inline-flex justify-center"
-              target="_blank"
-              rel="noreferrer"
-              href="https://discord.com/oauth2/authorize?client_id=YOUR_BOT_CLIENT_ID&scope=bot%20applications.commands&permissions=0"
-            >
-              Invite WoC ➕
-            </a>
-          </div>
+            {/* Sign in */}
+            <div className="woc-card p-5">
+              <h2 className="font-semibold">Step 2: Sign in</h2>
+              <p className="mt-1 text-sm text-[var(--text-muted)]">
+                Sign in with Discord to track votes and claim rewards.
+              </p>
 
-          <div className="mt-4 text-xs text-[var(--text-muted)]">
-            Tip: once you’ve invited WoC, refresh this page.
-          </div>
-        </div>
-      )}
+              <button
+                onClick={() => signIn("discord")}
+                className="mt-4 inline-flex w-full justify-center items-center gap-2 woc-btn-ghost"
+              >
+                Sign in with Discord <span>🔐</span>
+              </button>
 
-      <div className="woc-card p-6">
-        <h2 className="text-lg font-semibold mb-2">Voting</h2>
-        <p className="text-[var(--text-muted)] text-sm">
-          Coming next: connect top.gg + discordbotlist voting, track your streak, and claim WoC Coins.
-        </p>
+              <p className="mt-3 text-xs text-[var(--text-muted)]">
+                No account creation. Discord does the paperwork.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-8 space-y-4">
+            <div className="woc-card p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm text-[var(--text-muted)]">Signed in as</div>
+                  <div className="font-semibold">
+                    {session.user?.name || "Discord User"}
+                  </div>
+                </div>
+
+                <Link
+                  href="/vote"
+                  className="inline-flex items-center gap-2 woc-btn-ghost text-sm"
+                >
+                  Go vote for rewards <span>🗳️</span>
+                </Link>
+              </div>
+
+              <div className="mt-4 text-sm text-[var(--text-muted)]">
+                Next: we’ll plug your servers + vote history in here (Top.gg + DBL),
+                then show your earned WoC currency.
+              </div>
+            </div>
+
+            <div className="woc-card p-5">
+              <h2 className="font-semibold">Coming next</h2>
+              <ul className="mt-2 text-sm text-[var(--text-muted)] list-disc pl-5 space-y-1">
+                <li>Server selector (guilds you manage)</li>
+                <li>Vote streaks + claim timers</li>
+                <li>Rewards ledger (what you earned + when)</li>
+              </ul>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
