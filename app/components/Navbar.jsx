@@ -24,17 +24,20 @@ export default function Navbar() {
     return () => document.removeEventListener("mousedown", onDown);
   }, []);
 
-  // Use Discord avatar if present
   const userName =
     session?.user?.name || session?.user?.email?.split("@")?.[0] || "Adventurer";
 
-  const userImage = session?.user?.image || "/woc-avatar.png";
+  // Robust: only use external URL if it looks valid, otherwise fallback
+  const userImage =
+    session?.user?.image && session.user.image.startsWith("http")
+      ? session.user.image
+      : "/woc-avatar.png";
 
   return (
     <header className="sticky top-0 z-40 border-b border-[var(--border-subtle)]/40 bg-[color-mix(in_oklab,var(--bg-root)_80%,transparent)] backdrop-blur-xl">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
-        {/* Left: Avatar + title */}
-        <Link href="/" className="flex items-center gap-3 min-w-[220px]">
+        {/* Left: WoC avatar + title */}
+        <Link href="/" className="flex items-center gap-3 min-w-[200px]">
           {/* WoC avatar logo */}
           <div
             className="
@@ -52,12 +55,12 @@ export default function Navbar() {
               fill
               sizes="44px"
               priority
-              className="
-                object-cover
-                object-[26%_40%]
-                scale-[1.85]
-                pointer-events-none
-              "
+              className="object-cover pointer-events-none"
+              // For wide art (960x540): use object-position + zoom + tiny nudge
+              style={{
+                objectPosition: "38% 46%",
+                transform: "scale(1.85) translate(8px, 6px)",
+              }}
             />
 
             {/* Glow ring */}
@@ -75,7 +78,7 @@ export default function Navbar() {
             <div className="text-sm font-semibold tracking-wide">
               World of Communities
             </div>
-            {/* removed: "Discord adventure engine" subtext */}
+            {/* subtitle removed */}
           </div>
         </Link>
 
@@ -126,7 +129,7 @@ export default function Navbar() {
         <div className="flex items-center gap-3">
           <ThemeToggle />
 
-          {/* Small Vote pill */}
+          {/* Vote pill */}
           <Link
             href="/vote"
             className="hidden sm:inline-flex items-center gap-1 text-xs px-3 py-1 rounded-full
@@ -156,17 +159,19 @@ export default function Navbar() {
                 aria-haspopup="menu"
                 aria-expanded={open}
               >
+                {/* Use <img> for Discord avatars = no broken Next/Image domains */}
                 <span className="relative h-6 w-6 rounded-full overflow-hidden border border-[var(--border-subtle)] bg-[var(--bg-card)]">
-                  <Image
+                  <img
                     src={userImage}
                     alt="Your avatar"
-                    fill
-                    sizes="24px"
-                    className="object-cover"
-                    // helps if discord image occasionally fails
-                    unoptimized
+                    className="h-full w-full object-cover"
+                    onError={(e) => {
+                      // hard fallback if the external URL fails
+                      e.currentTarget.src = "/woc-avatar.png";
+                    }}
                   />
                 </span>
+
                 <span className="max-w-[110px] truncate">{userName}</span>
                 <span className="opacity-70">▾</span>
               </button>
@@ -205,7 +210,6 @@ export default function Navbar() {
             </div>
           )}
 
-          {/* If NOT authed: don't show a sign-in button here (you wanted it in Dashboard page) */}
           {/* Invite CTA */}
           <a
             href="https://discord.com/oauth2/authorize"
