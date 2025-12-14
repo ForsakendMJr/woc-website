@@ -57,8 +57,14 @@ export default function Navbar() {
               priority
               className="object-cover pointer-events-none"
               // For wide art (960x540): use object-position + zoom + tiny nudge
+
+              // Wide art → increase scale
+
+              // Face too left → increase translate-x
+
+              // Face too high → increase translate-y
               style={{
-                objectPosition: "38% 46%",
+                objectPosition: "42% 48%",
                 transform: "scale(1.85) translate(8px, 6px)",
               }}
             />
