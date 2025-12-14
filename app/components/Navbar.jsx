@@ -54,11 +54,12 @@ export default function Navbar() {
               priority
               className="
                 object-cover
-                object-[22%_42%]
-                scale-[1.75]
+                object-[26%_40%]
+                scale-[1.85]
                 pointer-events-none
               "
             />
+
             {/* Glow ring */}
             <span
               className="
@@ -74,9 +75,7 @@ export default function Navbar() {
             <div className="text-sm font-semibold tracking-wide">
               World of Communities
             </div>
-            <div className="text-[0.7rem] text-[var(--text-muted)]">
-              Discord adventure engine
-            </div>
+            {/* removed: "Discord adventure engine" subtext */}
           </div>
         </Link>
 
@@ -140,7 +139,7 @@ export default function Navbar() {
             <span>🗳️</span>
           </Link>
 
-          {/* If authed: show account pill */}
+          {/* If authed: show account pill + dropdown */}
           {authed && (
             <div className="relative" ref={menuRef}>
               <button
@@ -164,6 +163,8 @@ export default function Navbar() {
                     fill
                     sizes="24px"
                     className="object-cover"
+                    // helps if discord image occasionally fails
+                    unoptimized
                   />
                 </span>
                 <span className="max-w-[110px] truncate">{userName}</span>
@@ -204,6 +205,7 @@ export default function Navbar() {
             </div>
           )}
 
+          {/* If NOT authed: don't show a sign-in button here (you wanted it in Dashboard page) */}
           {/* Invite CTA */}
           <a
             href="https://discord.com/oauth2/authorize"
