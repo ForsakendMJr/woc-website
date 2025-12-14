@@ -2,7 +2,11 @@ import NextAuth from "next-auth";
 import DiscordProvider from "next-auth/providers/discord";
 
 export const authOptions = {
+  // MUST be set on Vercel + local
   secret: process.env.NEXTAUTH_SECRET,
+
+  // Turn on logs so you can see what's happening in Vercel logs
+  debug: true,
 
   providers: [
     DiscordProvider({
@@ -10,8 +14,9 @@ export const authOptions = {
       clientSecret: process.env.DISCORD_CLIENT_SECRET,
       authorization: {
         params: {
-          // IMPORTANT: "guilds" is what allows /users/@me/guilds
+          // IMPORTANT
           scope: "identify email guilds",
+          prompt: "none",
         },
       },
     }),
@@ -21,16 +26,19 @@ export const authOptions = {
 
   callbacks: {
     async jwt({ token, account }) {
-      // When the user signs in, Discord gives us an access_token
-      if (account?.access_token) {
-        token.accessToken = account.access_token;
+      // On the FIRST login, account exists and contains Discord access_token
+      if (account) {
+        token.accessToken = account.access_token ?? token.accessToken ?? null;
+        token.tokenType = account.token_type ?? token.tokenType ?? null;
+        token.provider = account.provider ?? token.provider ?? "discord";
       }
       return token;
     },
 
     async session({ session, token }) {
-      // Put it onto the session so the client (dashboard) can use it
-      session.accessToken = token.accessToken || null;
+      // Put access token onto session (client can read it)
+      session.accessToken = token.accessToken ?? null;
+      session.tokenType = token.tokenType ?? null;
       return session;
     },
   },
