@@ -64,7 +64,7 @@ export default function Navbar() {
 
               // Face too high → increase translate-y
               style={{
-                objectPosition: "42% 48%",
+                objectPosition: "50% 50%",
                 transform: "scale(1.85) translate(8px, 6px)",
               }}
             />
