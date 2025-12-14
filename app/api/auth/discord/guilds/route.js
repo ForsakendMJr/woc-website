@@ -1,42 +1,83 @@
+// app/api/discord/guilds/route.js
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { headers } from "next/headers";
-import { authOptions } from "../_authOptions";
+import { getToken } from "next-auth/jwt";
 
-// If you don't have authOptions file yet, skip this and use inline options below.
-// (I’ll provide the clean authOptions file in step 2.1)
+const PERM_ADMIN = 0x8;
 
-export async function GET() {
-  const session = await getServerSession(authOptions);
-  if (!session?.accessToken) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+function roleFromGuild(g) {
+  if (g?.owner) return "Owner";
+  const perms = Number(g?.permissions || 0);
+  if ((perms & PERM_ADMIN) === PERM_ADMIN) return "Admin";
+  return "Manager";
+}
 
-  const res = await fetch("https://discord.com/api/users/@me/guilds", {
-    headers: {
-      Authorization: `Bearer ${session.accessToken}`,
-    },
-    cache: "no-store",
-  });
+export async function GET(req) {
+  try {
+    // Reads the NextAuth JWT cookie (server-side)
+    const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
 
-  if (!res.ok) {
+    if (!token?.accessToken) {
+      return NextResponse.json(
+        {
+          guilds: [],
+          source: "fallback",
+          error:
+            "No access token found in session. Make sure NextAuth jwt() callback stores account.access_token into token.accessToken, and redeploy/relogin.",
+        },
+        { status: 401 }
+      );
+    }
+
+    const res = await fetch("https://discord.com/api/users/@me/guilds", {
+      headers: {
+        Authorization: `Bearer ${token.accessToken}`,
+      },
+      cache: "no-store",
+    });
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      return NextResponse.json(
+        {
+          guilds: [],
+          source: "fallback",
+          error: `Discord guild fetch failed (${res.status}). ${txt?.slice(0, 220) || ""}`.trim(),
+        },
+        { status: 502 }
+      );
+    }
+
+    const raw = await res.json();
+
+    // Only show servers user can manage (Owner or Admin)
+    const manageable = (Array.isArray(raw) ? raw : [])
+      .filter(
+        (g) => g?.owner || ((Number(g?.permissions || 0) & PERM_ADMIN) === PERM_ADMIN)
+      )
+      .map((g) => ({
+        id: g.id,
+        name: g.name,
+        icon: g.icon ?? null,
+        role: roleFromGuild(g),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
     return NextResponse.json(
-      { error: "Failed to fetch guilds", status: res.status },
+      {
+        guilds: manageable,
+        source: "live",
+        error: "",
+      },
+      { status: 200 }
+    );
+  } catch (e) {
+    return NextResponse.json(
+      {
+        guilds: [],
+        source: "fallback",
+        error: e?.message || "Unexpected error in /api/discord/guilds",
+      },
       { status: 500 }
     );
   }
-
-  const guilds = await res.json();
-
-  // Filter: show only guilds where user likely can manage
-  // Manage Guild = 0x20 (32), Administrator = 0x8 (8)
-  const MANAGE_GUILD = 1 << 5; // 32
-  const ADMINISTRATOR = 1 << 3; // 8
-
-  const manageable = (guilds || []).filter((g) => {
-    const perms = Number(g.permissions) || 0;
-    return (perms & MANAGE_GUILD) === MANAGE_GUILD || (perms & ADMINISTRATOR) === ADMINISTRATOR;
-  });
-
-  return NextResponse.json({ guilds: manageable });
 }

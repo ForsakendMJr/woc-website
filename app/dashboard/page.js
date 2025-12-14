@@ -7,15 +7,11 @@ import Link from "next/link";
 import { useWocTheme } from "../WocThemeProvider";
 
 /**
- * WoC Dashboard v2.1 (Frontend-first, production-safe)
+ * WoC Dashboard v2.2 (Frontend-first, production-safe)
  * ✅ Fetch guilds via your own API route: /api/discord/guilds
+ * ✅ Never prints HTML error pages into the UI (sanitized + capped)
  * ✅ Server selector UI + fake “Link & Sync” animation
  * ✅ Vote Claim modal (stubbed verification + cooldown timers)
- *
- * Notes:
- * - This avoids calling discord.com from the browser (CORS/security/token issues).
- * - Your /api/discord/guilds route should read the access token server-side (NextAuth getToken()).
- * - Vote claim is still stubbed and uses localStorage cooldowns until you wire real verification.
  */
 
 const LS = {
@@ -69,6 +65,25 @@ function safeLocalSet(key, val) {
   } catch {
     // ignore
   }
+}
+
+// Never allow gigantic/HTML errors to render
+function safeErrorMessage(input) {
+  const msg = String(input || "").trim();
+  if (!msg) return "";
+
+  const looksLikeHtml =
+    msg.includes("<!DOCTYPE") ||
+    msg.includes("<html") ||
+    msg.includes("<head") ||
+    msg.includes("<body");
+
+  if (looksLikeHtml) {
+    return "Guild fetch returned HTML (route missing or misrouted). Make sure /app/api/discord/guilds/route.js exists and is deployed.";
+  }
+
+  // hard cap so it can’t flood the card
+  return msg.length > 240 ? msg.slice(0, 240) + "…" : msg;
 }
 
 function Modal({ open, onClose, title, subtitle, children }) {
@@ -200,19 +215,35 @@ export default function DashboardPage() {
 
       try {
         const res = await fetch("/api/discord/guilds", { cache: "no-store" });
+        const contentType = (res.headers.get("content-type") || "").toLowerCase();
 
-        // If route isn't created yet or errors, we fall back
+        // If route errors, Next may return HTML. Read text safely.
         if (!res.ok) {
           const txt = await res.text().catch(() => "");
-          throw new Error(`Guild fetch failed (${res.status}). ${txt}`.trim());
+          throw new Error(
+            safeErrorMessage(
+              `Guild fetch failed (${res.status}). ${txt}`
+            )
+          );
+        }
+
+        // If it isn't JSON, treat it like a misroute.
+        if (!contentType.includes("application/json")) {
+          const txt = await res.text().catch(() => "");
+          throw new Error(
+            safeErrorMessage(
+              `Guild fetch returned non-JSON response. ${txt}`
+            )
+          );
         }
 
         const data = await res.json().catch(() => ({}));
 
-        // expected-ish: { guilds: [...], source?: "live"|"fallback", error?: string }
+        // expected: { guilds: [...], source?: "live"|"fallback", error?: string }
         const list = Array.isArray(data.guilds) ? data.guilds : [];
-        const src = data.source === "live" || data.source === "fallback" ? data.source : "live";
-        const err = typeof data.error === "string" ? data.error : "";
+        const src =
+          data.source === "live" || data.source === "fallback" ? data.source : "live";
+        const err = safeErrorMessage(data.error);
 
         if (cancelled) return;
 
@@ -235,17 +266,20 @@ export default function DashboardPage() {
 
         // Selection: keep saved if exists, else first
         const savedSel = safeLocalGet(LS.selectedGuild, "") || "";
-        const effective = (list.length ? list : FALLBACK_GUILDS).find((x) => String(x.id) === String(savedSel));
-        const firstId = String((list.length ? list : FALLBACK_GUILDS)[0]?.id || "");
-        setSelectedGuildId(savedSel && effective ? String(savedSel) : firstId);
+        const basis = list.length ? list : FALLBACK_GUILDS;
 
+        const exists = basis.find((x) => String(x.id) === String(savedSel));
+        const firstId = String(basis[0]?.id || "");
+        setSelectedGuildId(savedSel && exists ? String(savedSel) : firstId);
       } catch (e) {
         if (cancelled) return;
         setGuilds(FALLBACK_GUILDS);
         setGuildsSource("fallback");
         setGuildsError(
-          e?.message ||
-            "Failed to fetch guilds. Make sure /api/discord/guilds exists and NextAuth is configured."
+          safeErrorMessage(
+            e?.message ||
+              "Failed to fetch guilds. Make sure /api/discord/guilds exists and NextAuth is configured."
+          )
         );
         setSelectedGuildId((prev) => prev || String(FALLBACK_GUILDS[0]?.id || ""));
       }
@@ -356,7 +390,7 @@ export default function DashboardPage() {
       return res;
     }
 
-    // set cooldown now (single source of truth)
+    // set cooldown now
     const key = source === "topgg" ? LS.claimTopggAt : LS.claimDblAt;
     safeLocalSet(key, String(Date.now()));
 
