@@ -53,8 +53,9 @@ export default function Navbar() {
               src="/woc-avatar.png"
               alt="WoC avatar"
               fill
-              sizes="44px"
+              sizes="64px"
               priority
+              quality={100}
               className="object-cover pointer-events-none"
               // For wide art (960x540): use object-position + zoom + tiny nudge
 
@@ -65,7 +66,7 @@ export default function Navbar() {
               // Face too high → increase translate-y
               style={{
                 objectPosition: "50% 50%",
-                transform: "scale(1.85) translate(8px, 6px)",
+                transform: "scale(1) translate(8px, 6px)",
               }}
             />
 
