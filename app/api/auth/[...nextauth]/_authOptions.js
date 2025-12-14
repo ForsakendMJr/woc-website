@@ -1,4 +1,3 @@
-// app/api/auth/[...nextauth]/_authOptions.js
 import DiscordProvider from "next-auth/providers/discord";
 
 export const authOptions = {
