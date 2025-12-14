@@ -102,26 +102,29 @@ export default function HomePage() {
           <div className="space-y-3 text-xs sm:text-[0.78rem]">
             {/* Avatar + line */}
             <div className="flex items-center gap-2">
-              <div
-                className="
-                  relative h-7 w-7 rounded-full overflow-hidden
-                  shadow-md border border-[var(--border-subtle)]
-                  bg-[var(--bg-card)]
-                "
-              >
-                <Image
-                  src="/woc-avatar.png"
-                  alt="WoC avatar"
-                  fill
-                  sizes="28px"
-                  className="
-                    object-cover
-                    scale-[1.8]
-                    object-[18%_38%]   /* same face framing vibes as navbar */
-                    pointer-events-none
-                  "
-                />
-              </div>
+<div
+  className="
+    relative h-8 w-8 rounded-full overflow-hidden
+    shadow-md border border-[var(--border-subtle)]
+    bg-[var(--bg-card)]
+    flex-shrink-0
+  "
+>
+  <Image
+    src="/woc-avatar.png"
+    alt="WoC avatar"
+    fill
+    sizes="32px"
+    quality={100}
+    priority
+    className="object-cover pointer-events-none"
+    style={{
+      objectPosition: "38% 46%",
+      transform: "scale(1.35) translate(4px, 3px)",
+    }}
+  />
+</div>
+
 
               <div className="text-[var(--text-muted)]">
                 <span className="font-semibold text-[var(--text-main)]">
