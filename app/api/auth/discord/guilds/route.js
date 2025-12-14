@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "../../auth/[...nextauth]/_authOptions";
+import { authOptions } from "../../[...nextauth]/_authOptions";
 
 const PERM_ADMIN = 0x8;
 
