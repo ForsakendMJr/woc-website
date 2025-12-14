@@ -1,3 +1,4 @@
+// app/api/auth/[...nextauth]/_authOptions.js
 import DiscordProvider from "next-auth/providers/discord";
 
 export const authOptions = {
@@ -5,11 +6,7 @@ export const authOptions = {
     DiscordProvider({
       clientId: process.env.DISCORD_CLIENT_ID,
       clientSecret: process.env.DISCORD_CLIENT_SECRET,
-      authorization: {
-        params: {
-          scope: "identify email guilds",
-        },
-      },
+      authorization: { params: { scope: "identify email guilds" } },
     }),
   ],
   session: { strategy: "jwt" },
