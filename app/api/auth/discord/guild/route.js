@@ -5,7 +5,14 @@ import { getToken } from "next-auth/jwt";
 export const dynamic = "force-dynamic";
 
 const PERM_ADMIN = 0x8; // Administrator bit
-const DISCORD_API = "https://discord.com/api";
+const DISCORD_API = "https://discord.com/api/v10";
+
+// Cache (per-user, per serverless instance)
+// Prevents hammering Discord during rerenders/prefetch/strict mode.
+const CACHE_TTL_MS = 30 * 1000;
+const cache =
+  globalThis.__wocGuildCache || (globalThis.__wocGuildCache = new Map());
+// key -> { exp:number, data:{ guilds, source, error? } }
 
 function roleFromGuild(g) {
   if (g?.owner) return "Owner";
@@ -14,19 +21,44 @@ function roleFromGuild(g) {
   return "Manager";
 }
 
+function safeText(input, max = 240) {
+  const s = String(input || "").trim();
+  if (!s) return "";
+  // Don’t dump HTML into the UI if Next/edge returns a page
+  const looksLikeHtml =
+    s.includes("<!DOCTYPE") || s.includes("<html") || s.includes("<body");
+  if (looksLikeHtml) return "Non-JSON/HTML response received.";
+  return s.length > max ? s.slice(0, max) + "…" : s;
+}
+
 export async function GET(req) {
   try {
-    // Pull the NextAuth JWT from cookies (server-side)
     const token = await getToken({
       req,
       secret: process.env.NEXTAUTH_SECRET,
     });
 
     const accessToken = token?.accessToken;
+    const userKey = token?.sub || token?.id || token?.userId || "me";
+    const cacheKey = `guilds:${userKey}`;
+    const now = Date.now();
+
+    // Serve fresh cache immediately
+    const hit = cache.get(cacheKey);
+    if (hit && hit.exp > now) {
+      return NextResponse.json(
+        { ...hit.data, source: "cache" },
+        { status: 200 }
+      );
+    }
 
     if (!accessToken) {
       return NextResponse.json(
-        { guilds: [], source: "none", error: "Not authenticated (no access token)." },
+        {
+          guilds: [],
+          source: "none",
+          error: "Not authenticated (no access token).",
+        },
         { status: 401 }
       );
     }
@@ -36,26 +68,59 @@ export async function GET(req) {
       cache: "no-store",
     });
 
+    // ✅ Rate limit handling
+    if (res.status === 429) {
+      const body = await res.json().catch(() => ({}));
+      const retryAfter = Number(body?.retry_after || 1);
+
+      // If we have any cached data (even expired), serve it as “stale” for nicer UX
+      if (hit?.data?.guilds?.length) {
+        return NextResponse.json(
+          {
+            ...hit.data,
+            source: "cache-stale",
+            error: `Rate limited by Discord. Try again in ~${retryAfter.toFixed(
+              1
+            )}s.`,
+          },
+          { status: 200 }
+        );
+      }
+
+      return NextResponse.json(
+        {
+          guilds: [],
+          source: "none",
+          error: `Rate limited by Discord. Try again in ~${retryAfter.toFixed(
+            1
+          )}s.`,
+        },
+        {
+          status: 429,
+          headers: { "Retry-After": String(Math.ceil(retryAfter)) },
+        }
+      );
+    }
+
     if (!res.ok) {
       const txt = await res.text().catch(() => "");
       return NextResponse.json(
         {
           guilds: [],
           source: "none",
-          error: `Discord guild fetch failed (${res.status}). ${txt}`.trim(),
+          error: safeText(
+            `Discord guild fetch failed (${res.status}). ${txt}`.trim()
+          ),
         },
         { status: 500 }
       );
     }
 
-    const raw = await res.json();
+    const raw = await res.json().catch(() => []);
 
-    // Keep only servers they can manage (Owner or Admin)
     const guilds = (Array.isArray(raw) ? raw : [])
       .filter(
-        (g) =>
-          g?.owner ||
-          ((Number(g?.permissions || 0) & PERM_ADMIN) === PERM_ADMIN)
+        (g) => g?.owner || ((Number(g?.permissions || 0) & PERM_ADMIN) === PERM_ADMIN)
       )
       .map((g) => ({
         id: String(g.id),
@@ -68,10 +133,19 @@ export async function GET(req) {
         a.owner === b.owner ? a.name.localeCompare(b.name) : a.owner ? -1 : 1
       );
 
-    return NextResponse.json({ guilds, source: "live" }, { status: 200 });
+    const payload = { guilds, source: "live" };
+
+    // Store cache (even if empty, it prevents thrashing)
+    cache.set(cacheKey, { exp: now + CACHE_TTL_MS, data: payload });
+
+    return NextResponse.json(payload, { status: 200 });
   } catch (err) {
     return NextResponse.json(
-      { guilds: [], source: "none", error: err?.message || "Unknown error." },
+      {
+        guilds: [],
+        source: "none",
+        error: safeText(err?.message || "Unknown error."),
+      },
       { status: 500 }
     );
   }
