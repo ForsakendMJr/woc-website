@@ -1,22 +1,36 @@
-'use client';
+"use client";
 
-import Link from 'next/link';
-import { useWocTheme } from '../WocThemeProvider';
+import Link from "next/link";
+import { useWocTheme } from "../WocThemeProvider";
 
 export default function WocFloatingAssistant() {
   const { mood } = useWocTheme();
 
   const moodText =
-    mood === 'hype'
-      ? 'Queue duels. I want fireworks.'
-      : mood === 'tired'
-      ? 'Maybe run /tutorial and chill.'
-      : mood === 'angry'
-      ? 'Find someone to 1v1. Immediately.'
-      : 'Try /exam or /duel and see what happens.';
+    mood === "battle"
+      ? "Queue duels. I want clean executions."
+      : mood === "playful"
+      ? "Try /exam or /duel. I’m feeling theatrical."
+      : mood === "omen"
+      ? "Check your logs. Shadows love unmoderated servers."
+      : mood === "flustered"
+      ? "I’m totally fine. Let’s… do something impressive."
+      : mood === "neutral"
+      ? "System ready. Choose a command."
+      : "Try /exam or /duel and see what happens.";
 
   const emoji =
-    mood === 'hype' ? '🔥' : mood === 'tired' ? '😴' : mood === 'angry' ? '💢' : '🌌';
+    mood === "battle"
+      ? "⚔️"
+      : mood === "playful"
+      ? "✨"
+      : mood === "omen"
+      ? "🕯️"
+      : mood === "flustered"
+      ? "😳"
+      : mood === "neutral"
+      ? "🌌"
+      : "🌌";
 
   return (
     <div className="fixed bottom-4 right-4 z-40 max-w-xs">

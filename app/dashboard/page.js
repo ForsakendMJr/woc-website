@@ -34,6 +34,7 @@ async function fetchJson(url, opts = {}) {
   const res = await fetch(url, opts);
   const ct = (res.headers.get("content-type") || "").toLowerCase();
 
+  // If non-JSON, read text safely
   if (!ct.includes("application/json")) {
     const txt = await res.text().catch(() => "");
     const err = safeErrorMessage(txt || `Non-JSON response (${res.status})`);
@@ -43,11 +44,15 @@ async function fetchJson(url, opts = {}) {
   }
 
   const data = await res.json().catch(() => ({}));
+
   if (!res.ok) {
-    const e = new Error(safeErrorMessage(data?.error || `Request failed (${res.status})`));
+    const e = new Error(
+      safeErrorMessage(data?.error || `Request failed (${res.status})`)
+    );
     e.status = res.status;
     throw e;
   }
+
   return data;
 }
 
@@ -80,7 +85,7 @@ export default function DashboardPage() {
     woc = null;
   }
 
-  const { data: session, status } = useSession();
+  const { status } = useSession();
   const loading = status === "loading";
   const authed = status === "authenticated";
 
@@ -118,6 +123,10 @@ export default function DashboardPage() {
   const guildAbortRef = useRef(null);
   const perGuildAbortRef = useRef(null);
 
+  // Status retry/debounce timers
+  const statusRetryTimerRef = useRef(null);
+  const statusDebounceTimerRef = useRef(null);
+
   const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || "";
   const inviteLinkForGuild = (gid) =>
     `https://discord.com/oauth2/authorize?client_id=${clientId}&scope=bot%20applications.commands&permissions=8&guild_id=${gid}&disable_guild_select=true`;
@@ -134,6 +143,8 @@ export default function DashboardPage() {
       if (toastTimer.current) clearTimeout(toastTimer.current);
       if (guildAbortRef.current) guildAbortRef.current.abort();
       if (perGuildAbortRef.current) perGuildAbortRef.current.abort();
+      if (statusRetryTimerRef.current) clearTimeout(statusRetryTimerRef.current);
+      if (statusDebounceTimerRef.current) clearTimeout(statusDebounceTimerRef.current);
     };
   }, []);
 
@@ -174,13 +185,12 @@ export default function DashboardPage() {
         setSelectedGuildId(pick);
         if (pick) safeSet(LS.selectedGuild, pick);
 
-        // If API says we’re rate-limited, show a friendly warning but don’t nuke UI
+        // If API includes an informational error field, display it
         if (data?.error) setGuildErr(safeErrorMessage(data.error));
       } catch (e) {
         if (e?.name === "AbortError") return;
         setGuildErr(safeErrorMessage(e?.message || "Failed to load guilds."));
         setGuilds([]);
-        // allow retry by refreshing page (or you can add a retry button)
       }
     })();
   }, [authed]);
@@ -197,9 +207,13 @@ export default function DashboardPage() {
     const ac = new AbortController();
     perGuildAbortRef.current = ac;
 
-    // install check
+    // ===== INSTALL CHECK (debounced + 429 backoff) =====
+    if (statusRetryTimerRef.current) clearTimeout(statusRetryTimerRef.current);
+    if (statusDebounceTimerRef.current) clearTimeout(statusDebounceTimerRef.current);
+
     setInstall({ loading: true, installed: null, error: "" });
-    (async () => {
+
+    const runStatus = async () => {
       try {
         const data = await fetchJson(`/api/guilds/${selectedGuildId}/status`, {
           cache: "no-store",
@@ -213,15 +227,39 @@ export default function DashboardPage() {
         else showToast("WoC isn’t in that server yet. Gate closed. 🔒", "omen");
       } catch (e) {
         if (e?.name === "AbortError") return;
+
+        // If rate-limited, wait and retry automatically
+        if (e?.status === 429) {
+          setInstall({
+            loading: true,
+            installed: null,
+            error: safeErrorMessage(e?.message || "Rate limited (429). Retrying…"),
+          });
+
+          // If your status route later returns retry_after, you can parse it here.
+          const retryMs = 1200;
+
+          statusRetryTimerRef.current = setTimeout(() => {
+            if (!ac.signal.aborted) runStatus();
+          }, retryMs);
+
+          return;
+        }
+
         setInstall({
           loading: false,
           installed: null,
           error: safeErrorMessage(e?.message || "Install check failed"),
         });
       }
-    })();
+    };
 
-    // settings fetch
+    // Debounce so quick switching doesn’t spam your API
+    statusDebounceTimerRef.current = setTimeout(() => {
+      if (!ac.signal.aborted) runStatus();
+    }, 250);
+
+    // ===== SETTINGS FETCH =====
     setSettingsLoading(true);
     setSettings(null);
 
@@ -231,11 +269,11 @@ export default function DashboardPage() {
           cache: "no-store",
           signal: ac.signal,
         });
-
         setSettings(data.settings);
       } catch (e) {
         if (e?.name === "AbortError") return;
-        // fallback defaults (so UI still works)
+
+        // fallback defaults so UI still works
         setSettings({
           guildId: selectedGuildId,
           prefix: "!",
@@ -380,7 +418,11 @@ export default function DashboardPage() {
                     {install.loading ? <Pill>Checking gate…</Pill> : null}
                     {install.installed === true ? <Pill>Installed ✅</Pill> : null}
                     {install.installed === false ? <Pill>Not installed 🔒</Pill> : null}
-                    {install.error ? <Pill>Error ⚠️</Pill> : null}
+                    {install.error ? (
+                      <Pill>
+                        {install.error.includes("429") ? "Rate limited ⏳" : "Error ⚠️"}
+                      </Pill>
+                    ) : null}
                   </div>
                 </div>
 
@@ -418,6 +460,12 @@ export default function DashboardPage() {
                         Once invited, refresh this page and the gate will open automatically.
                       </div>
                     )}
+                  </div>
+                ) : null}
+
+                {install.error ? (
+                  <div className="mt-3 text-[0.72rem] text-[var(--text-muted)]">
+                    Detail: {install.error}
                   </div>
                 ) : null}
               </div>
@@ -493,9 +541,11 @@ export default function DashboardPage() {
                 <div className="mt-4 text-sm text-[var(--text-muted)]">Loading settings…</div>
               ) : (
                 <div className="mt-5">
-                  {/* (Your tab contents are unchanged below; keep exactly what you already wrote) */}
-                  {/* Paste your existing Overview / Moderation / Logs / Personality blocks here */}
-                  {/* Nothing else required for the fetch fixes. */}
+                  {/* ✅ Paste your existing Overview / Moderation / Logs / Personality UI blocks here */}
+                  {/* This file focuses on fixing the rate-limit + error-pill behaviour */}
+                  <div className="text-sm text-[var(--text-muted)]">
+                    Paste your tab contents back in here (unchanged).
+                  </div>
                 </div>
               )}
             </div>

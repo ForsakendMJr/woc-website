@@ -1,92 +1,112 @@
-'use client';
+"use client";
 
-import { useState, useEffect } from 'react';
-import { useWocTheme } from '../WocThemeProvider';
+import { useEffect, useState } from "react";
+import { useWocTheme } from "../WocThemeProvider";
 
-/* ---------------------------------------------
-   Dialogue Templates
-   Each scenario has mood-based variants.
-   Add as many as you want.
----------------------------------------------- */
+/**
+ * Uses your actual moods:
+ * neutral | battle | playful | story | omen | flustered
+ */
 const WOC_LINES = {
   duel_win: {
-    neutral: [
+    story: [
       "Clan chat is screaming. **You** just hard-carried that duel.",
       "Another victory logged. **You** walk away glowing.",
-      "WOC quietly nods — a clean execution.",
+      "WOC quietly nods. A clean execution.",
     ],
-    hype: [
-      "BROOO THAT WAS INSANE. **YOU COOKED SO HARD.** 🔥🔥",
-      "**YOU JUST ERASED THEM FROM HISTORY.**",
+    playful: [
+      "ABSURD DAMAGE. **YOU COOKED.** 🔥",
+      "**You just erased them from the timeline.**",
+      "WOC is grinning. This is going in the highlight reel.",
     ],
-    tired: [
-      "Victory… but maybe take a breather? WOC is sipping tea slowly.",
-      "You win… WOC yawns. ‘Good job. I guess.’ 😪",
+    battle: [
+      "Victory confirmed. No mercy. No notes.",
+      "Target down. Arena integrity maintained.",
     ],
-    angry: [
-      "Finally. Justice. That duel was personal.",
-      "**You crushed them.** WOC's aura crackles.",
+    omen: [
+      "You won… but the air feels *wrong*. Something’s coming.",
+      "Victory registered. WOC’s sensors whisper: ‘Not over.’",
+    ],
+    flustered: [
+      "YOU… you did that?? I mean… obviously you did. 😳",
+      "Win detected. WOC is pretending this was expected.",
+    ],
+    neutral: [
+      "Win logged. Good work.",
+      "Victory secured. Next.",
     ],
   },
 
   duel_loss: {
-    neutral: [
+    story: [
       "Tough loss. Reset, refocus, re-enter the arena.",
-      "Defeat is data — and WOC logs everything.",
+      "Defeat is data. WOC logs everything.",
     ],
-    hype: [
+    playful: [
       "YOU ALMOST HAD THAT. RUN IT BACK. 🗣️",
-      "Not bad — now go terrorize the ladder.",
+      "Not bad. Now go terrorize the ladder again.",
     ],
-    tired: [
-      "Loss received… WOC blinks slowly. ‘Oof.’",
-      "Defeat… WOC curls up under a blanket.",
+    battle: [
+      "Loss acknowledged. Adapt and strike again.",
+      "Training mode recommended. Immediately.",
     ],
-    angry: [
-      "UNACCEPTABLE. WOC DEMANDS A REMATCH.",
-      "You lost… WOC is fuming.",
+    omen: [
+      "Defeat… and the shadows seem pleased.",
+      "The arena remembers. WOC does too.",
+    ],
+    flustered: [
+      "OKAY but like… that was *close*. We don’t talk about it. 😤",
+      "Loss received. WOC is… not panicking. Definitely not.",
+    ],
+    neutral: [
+      "Loss logged. Try again.",
+      "Defeat recorded.",
     ],
   },
 
   exam_fail: {
-    neutral: [
-      "Exam failed — but progress is progress.",
+    story: [
+      "Exam failed, but progress is progress.",
       "WOC logs the failure. Retry recommended.",
     ],
-    hype: [
+    playful: [
       "YOU WERE *RIGHT THERE*. LOCK IN AND SEND IT AGAIN.",
       "This is your villain arc. Power up.",
     ],
-    tired: [
-      "Another fail… WOC sighs sympathetically.",
-      "It’s okay… WOC pats your head tiredly.",
+    battle: [
+      "Failure detected. Recalibrate and reattempt.",
+      "We do not lose to paperwork. Again.",
     ],
-    angry: [
-      "The exam humiliated us. We retaliate tomorrow.",
-      "Failure detected. Rage increasing.",
+    omen: [
+      "The exam humiliated us. The rubric will answer for this.",
+      "Failure… and the system feels… amused.",
+    ],
+    flustered: [
+      "It’s fine. Totally fine. We’re… fine. 😅",
+      "Okay, okay. One more try. No one saw that.",
+    ],
+    neutral: [
+      "Exam failed. Try again.",
+      "Attempt logged. Incomplete.",
     ],
   },
 };
 
-/* ---------------------------------------------
-   Component
----------------------------------------------- */
 export default function WocTalks() {
-  const { mood } = useWocTheme(); // hype, tired, angry, neutral
-  const [scenario, setScenario] = useState('duel_win');
-  const [line, setLine] = useState(''); // first SSR-safe render
+  const { mood } = useWocTheme(); // neutral | battle | playful | story | omen | flustered
+  const [scenario, setScenario] = useState("duel_win");
+  const [line, setLine] = useState("");
 
-  // Pick a random line SAFELY (client only)
   function pickLine(currentScenario, currentMood) {
     const set =
       WOC_LINES[currentScenario]?.[currentMood] ||
+      WOC_LINES[currentScenario]?.story ||
       WOC_LINES[currentScenario]?.neutral ||
       ["WOC has no words… suspicious."];
 
     return set[Math.floor(Math.random() * set.length)];
   }
 
-  // Only runs on the client → avoids hydration mismatch
   useEffect(() => {
     setLine(pickLine(scenario, mood));
   }, [scenario, mood]);
@@ -95,7 +115,6 @@ export default function WocTalks() {
     <div className="woc-card p-6 mt-10 border border-[var(--border-subtle)]/50">
       <h2 className="text-lg font-semibold mb-3">WOC Talks</h2>
 
-      {/* Scenario selector */}
       <label className="text-xs font-medium text-[var(--text-muted)]">
         Choose scenario:
       </label>
@@ -110,14 +129,12 @@ export default function WocTalks() {
         <option value="exam_fail">Exam fail</option>
       </select>
 
-      {/* Preview line */}
       <div className="mt-4">
         <p className="text-[13px] leading-relaxed text-[var(--text-main)]">
           {line || "WOC is thinking…"}
         </p>
       </div>
 
-      {/* Info footer */}
       <p className="mt-4 text-[11px] text-[var(--text-muted)]">
         These templates can be copied directly into your bot’s Discord commands.
       </p>
