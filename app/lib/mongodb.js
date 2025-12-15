@@ -1,25 +1,21 @@
-// app/lib/mongodb.js
 import mongoose from "mongoose";
 
-const MONGODB_URI = process.env.MONGODB_URI;
-
-if (!MONGODB_URI) {
-  throw new Error("Missing env var: MONGODB_URI");
-}
-
-// Cache the connection across hot reloads in dev & across route handlers
 let cached = global.mongoose;
 if (!cached) cached = global.mongoose = { conn: null, promise: null };
 
 export default async function dbConnect() {
+  const uri = process.env.MONGODB_URI;
+
+  if (!uri) {
+    throw new Error("Missing env var: MONGODB_URI");
+  }
+
   if (cached.conn) return cached.conn;
 
   if (!cached.promise) {
-    cached.promise = mongoose
-      .connect(MONGODB_URI, {
-        bufferCommands: false,
-      })
-      .then((m) => m);
+    cached.promise = mongoose.connect(uri, {
+      bufferCommands: false,
+    });
   }
 
   cached.conn = await cached.promise;
