@@ -366,7 +366,7 @@ export default function DashboardPage() {
     setInstall((s) => ({ ...s, loading: true, warning: "" }));
     (async () => {
       try {
-        const data = await fetchJson(`/api/auth/guilds/${selectedGuildId}/status`, {
+        const data = await fetchJson(`/api/guilds/${selectedGuildId}/status`, {
           cache: "no-store",
           signal: ac.signal,
         });
@@ -392,7 +392,7 @@ export default function DashboardPage() {
 
     (async () => {
       try {
-        const data = await fetchJson(`/api/auth/guilds/${selectedGuildId}/settings`, {
+        const data = await fetchJson(`/api/guilds/${selectedGuildId}/settings`, {
           cache: "no-store",
           signal: ac.signal,
         });
@@ -416,7 +416,7 @@ export default function DashboardPage() {
     if (!selectedGuildId || !settings) return;
     setSettingsLoading(true);
     try {
-      const data = await fetchJson(`/api/auth/guilds/${selectedGuildId}/settings`, {
+      const data = await fetchJson(`/api/guilds/${selectedGuildId}/settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(settings),
