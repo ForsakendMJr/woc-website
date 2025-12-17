@@ -8,26 +8,34 @@ import { useWocTheme } from "../WocThemeProvider";
 
 const LS = { selectedGuild: "woc-selected-guild" };
 
-// ✅ Correct endpoints (don’t use /api/auth/* for your own routes)
-const GUILDS_ENDPOINT = "/api/discord/guilds";
+// ✅ Match YOUR actual route layout:
+const GUILDS_ENDPOINT = "/api/auth/discord/guilds";
+
+// ✅ Your other routes (as you pasted earlier)
 const STATUS_ENDPOINT = (gid) => `/api/guilds/${gid}/status`;
 const SETTINGS_ENDPOINT = (gid) => `/api/guilds/${gid}/settings`;
 
-fetchJson(`/api/guilds/${selectedGuildId}/status`)
-fetchJson(`/api/guilds/${selectedGuildId}/settings`)
-
 function safeGet(key, fallback = "") {
-  try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
+  try {
+    return localStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
 }
 function safeSet(key, val) {
-  try { localStorage.setItem(key, val); } catch {}
+  try {
+    localStorage.setItem(key, val);
+  } catch {}
 }
 
 function safeErrorMessage(input) {
   const msg = String(input || "").trim();
   if (!msg) return "";
   const looksLikeHtml =
-    msg.includes("<!DOCTYPE") || msg.includes("<html") || msg.includes("<body") || msg.includes("<head");
+    msg.includes("<!DOCTYPE") ||
+    msg.includes("<html") ||
+    msg.includes("<body") ||
+    msg.includes("<head");
   if (looksLikeHtml) return "Non-JSON/HTML response received (route missing or misrouted).";
   return msg.length > 260 ? msg.slice(0, 260) + "…" : msg;
 }
@@ -46,7 +54,9 @@ async function fetchJson(url, opts = {}) {
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    const e = new Error(safeErrorMessage(data?.error || data?.warning || `Request failed (${res.status})`));
+    const e = new Error(
+      safeErrorMessage(data?.error || data?.warning || `Request failed (${res.status})`)
+    );
     e.status = res.status;
     e.data = data;
     throw e;
@@ -71,6 +81,18 @@ function Pill({ tone = "default", children }) {
     <span className={cx("text-[0.72rem] px-2 py-1 rounded-full border", tones[tone] || tones.default)}>
       {children}
     </span>
+  );
+}
+
+function SoftNotice({ children }) {
+  if (!children) return null;
+  return (
+    <div className="mt-4 text-xs text-[var(--text-muted)]">
+      <span className="inline-flex items-center gap-2">
+        <span className="h-2 w-2 rounded-full bg-amber-400/70" />
+        <span>{children}</span>
+      </span>
+    </div>
   );
 }
 
@@ -221,7 +243,11 @@ function moduleEnabledFromSettings(modKey, settings) {
 
 export default function DashboardPage() {
   let woc = null;
-  try { woc = useWocTheme(); } catch { woc = null; }
+  try {
+    woc = useWocTheme();
+  } catch {
+    woc = null;
+  }
 
   const { status } = useSession();
   const loading = status === "loading";
@@ -296,7 +322,6 @@ export default function DashboardPage() {
         const data = await fetchJson(GUILDS_ENDPOINT, { cache: "no-store", signal: ac.signal });
         const list = Array.isArray(data.guilds) ? data.guilds : [];
 
-        // Don’t wipe UI if Discord rate-limits and route returns cached/stale
         if (list.length) setGuilds(list);
 
         const saved = safeGet(LS.selectedGuild, "");
@@ -321,7 +346,7 @@ export default function DashboardPage() {
   // On guild change: install gate + settings
   useEffect(() => {
     if (!authed) return;
-    if (!selectedGuildId) return; // ✅ prevents “Missing guildId” noise
+    if (!selectedGuildId) return;
 
     safeSet(LS.selectedGuild, selectedGuildId);
     setDirty(false);
@@ -342,7 +367,11 @@ export default function DashboardPage() {
         else if (data?.installed === false) showToast("Gate closed. Invite WoC to awaken controls. 🔒", "omen");
       } catch (e) {
         if (e?.name === "AbortError") return;
-        setInstall({ loading: false, installed: null, warning: safeErrorMessage(e?.message || "Gate check unavailable.") });
+        setInstall({
+          loading: false,
+          installed: null,
+          warning: safeErrorMessage(e?.message || "Gate check unavailable."),
+        });
       }
     })();
 
@@ -476,17 +505,12 @@ export default function DashboardPage() {
                       {install.loading ? <Pill>Checking gate…</Pill> : null}
                       {install.installed === true ? <Pill tone="ok">Installed ✅</Pill> : null}
                       {install.installed === false ? <Pill tone="warn">Not installed 🔒</Pill> : null}
-                      {guildWarn || install.warning ? <Pill tone="warn">Notice ⚠️</Pill> : null}
+                      {/* ✅ We no longer show “Notice ⚠️” as a badge. */}
                     </div>
                   }
                 />
 
-                {guildWarn ? (
-                  <div className="mt-4 text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
-                    <div className="font-semibold">Guild list notice</div>
-                    <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{guildWarn}</div>
-                  </div>
-                ) : null}
+                <SoftNotice>{guildWarn || ""}</SoftNotice>
 
                 <div className="mt-4">
                   <GuildPicker
@@ -501,12 +525,7 @@ export default function DashboardPage() {
                   />
                 </div>
 
-                {install.warning ? (
-                  <div className="mt-4 text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
-                    <div className="font-semibold">Gate notice</div>
-                    <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{install.warning}</div>
-                  </div>
-                ) : null}
+                <SoftNotice>{install.warning || ""}</SoftNotice>
 
                 {install.installed === false ? (
                   <div className="mt-4 woc-card p-4">
