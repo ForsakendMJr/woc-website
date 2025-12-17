@@ -1,3 +1,4 @@
+// app/api/guilds/[guildId]/status/route.js
 import { NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 
@@ -14,24 +15,24 @@ export async function GET(req, { params }) {
 
     if (!token) {
       return NextResponse.json(
-        { ok: false, installed: null, error: "Not authenticated." },
-        { status: 401 }
+        { ok: false, installed: null, warning: "Not authenticated." },
+        { status: 200 }
       );
     }
 
     const guildId = params?.guildId;
     if (!guildId) {
       return NextResponse.json(
-        { ok: false, installed: null, error: "Missing guildId." },
-        { status: 400 }
+        { ok: false, installed: null, warning: "Missing guildId." },
+        { status: 200 }
       );
     }
 
     const botToken = process.env.DISCORD_BOT_TOKEN;
     if (!botToken) {
       return NextResponse.json(
-        { ok: false, installed: null, error: "Missing DISCORD_BOT_TOKEN on server." },
-        { status: 500 }
+        { ok: false, installed: null, warning: "Missing DISCORD_BOT_TOKEN on server." },
+        { status: 200 }
       );
     }
 
@@ -40,21 +41,22 @@ export async function GET(req, { params }) {
       cache: "no-store",
     });
 
-    // Handle rate limit nicely so your UI can show "try again"
+    // Soft-handle rate limit: don’t flip UI into “Error”
     if (botGuildRes.status === 429) {
       const body = await botGuildRes.json().catch(() => ({}));
+      const retryAfter = Number(body?.retry_after || 1);
+
       return NextResponse.json(
         {
-          ok: false,
+          ok: true,
           installed: null,
-          error: `Discord rate limited (429). retry_after: ${body?.retry_after ?? "?"}`,
-          retry_after: body?.retry_after ?? null,
+          warning: `Discord rate-limited the bot guild check. Retry in ~${Math.ceil(retryAfter)}s.`,
+          retry_after: retryAfter,
         },
-        { status: 429 }
+        { status: 200, headers: { "Retry-After": String(Math.ceil(retryAfter)) } }
       );
     }
 
-    // Bot not in guild (or no access)
     if (botGuildRes.status === 403 || botGuildRes.status === 404) {
       return NextResponse.json({ ok: true, installed: false, guildId }, { status: 200 });
     }
@@ -62,16 +64,16 @@ export async function GET(req, { params }) {
     if (!botGuildRes.ok) {
       const txt = await botGuildRes.text().catch(() => "");
       return NextResponse.json(
-        { ok: false, installed: null, error: `Bot guild check failed: ${botGuildRes.status} ${txt}`.trim() },
-        { status: 500 }
+        { ok: true, installed: null, warning: `Bot guild check failed: ${botGuildRes.status} ${txt}`.trim() },
+        { status: 200 }
       );
     }
 
     return NextResponse.json({ ok: true, installed: true, guildId }, { status: 200 });
   } catch (err) {
     return NextResponse.json(
-      { ok: false, installed: null, error: err?.message || "Unknown error." },
-      { status: 500 }
+      { ok: true, installed: null, warning: err?.message || "Unknown error." },
+      { status: 200 }
     );
   }
 }

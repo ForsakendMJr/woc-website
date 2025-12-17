@@ -12,7 +12,7 @@ function isManageable(g) {
 }
 
 async function ensureCanManage(req, guildId) {
-  const token = await getToken({ req });
+  const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
   if (!token?.accessToken) return { ok: false, status: 401, error: "Not authenticated" };
 
   const meGuildsRes = await fetch(`${DISCORD_API}/users/@me/guilds`, {
