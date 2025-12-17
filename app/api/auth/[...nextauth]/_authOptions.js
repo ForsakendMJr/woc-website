@@ -9,13 +9,17 @@ export const authOptions = {
     }),
   ],
   session: { strategy: "jwt" },
+
   callbacks: {
     async jwt({ token, account }) {
+      // On first sign-in, store access token
       if (account?.access_token) token.accessToken = account.access_token;
       return token;
     },
+
     async session({ session, token }) {
-      session.accessToken = token.accessToken || null;
+      // Make it available client-side (your dashboard uses this indirectly)
+      session.accessToken = token?.accessToken || null;
       return session;
     },
   },

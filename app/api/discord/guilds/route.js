@@ -1,4 +1,4 @@
-// app/api/auth/discord/guilds/route.js
+// app/api/discord/guilds/route.js
 import { NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 
@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 const DISCORD_API = "https://discord.com/api/v10";
 const PERM_ADMIN = 0x8;
 
+// Small in-memory cache per serverless instance (helps with Strict Mode double-fetches)
 const CACHE_TTL_MS = 30 * 1000;
 const cache = globalThis.__wocGuildCache || (globalThis.__wocGuildCache = new Map());
 
@@ -20,7 +21,8 @@ function roleFromGuild(g) {
 function safeText(input, max = 220) {
   const s = String(input || "").trim();
   if (!s) return "";
-  const looksLikeHtml = s.includes("<!DOCTYPE") || s.includes("<html") || s.includes("<body") || s.includes("<head");
+  const looksLikeHtml =
+    s.includes("<!DOCTYPE") || s.includes("<html") || s.includes("<body") || s.includes("<head");
   if (looksLikeHtml) return "Non-JSON/HTML response received.";
   return s.length > max ? s.slice(0, max) + "…" : s;
 }
@@ -31,7 +33,10 @@ export async function GET(req) {
     const accessToken = token?.accessToken;
 
     if (!accessToken) {
-      return NextResponse.json({ guilds: [], source: "none", error: "Not authenticated." }, { status: 401 });
+      return NextResponse.json(
+        { guilds: [], source: "none", error: "Not authenticated." },
+        { status: 401 }
+      );
     }
 
     const userKey = token?.sub || token?.id || "me";
@@ -48,7 +53,7 @@ export async function GET(req) {
       cache: "no-store",
     });
 
-    // If rate limited: return cached (even stale) or empty, BUT status 200 + warning (no scary UI)
+    // Soft-handle Discord rate limits: return 200 + warning (so your UI doesn’t show scary “Error ⚠️”)
     if (res.status === 429) {
       const body = await res.json().catch(() => ({}));
       const retryAfter = Number(body?.retry_after || 1);

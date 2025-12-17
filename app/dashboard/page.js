@@ -13,6 +13,9 @@ const GUILDS_ENDPOINT = "/api/discord/guilds";
 const STATUS_ENDPOINT = (gid) => `/api/guilds/${gid}/status`;
 const SETTINGS_ENDPOINT = (gid) => `/api/guilds/${gid}/settings`;
 
+fetchJson(`/api/guilds/${selectedGuildId}/status`)
+fetchJson(`/api/guilds/${selectedGuildId}/settings`)
+
 function safeGet(key, fallback = "") {
   try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
 }

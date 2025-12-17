@@ -5,17 +5,80 @@ import { getToken } from "next-auth/jwt";
 export const dynamic = "force-dynamic";
 
 const DISCORD_API = "https://discord.com/api/v10";
+const PERM_ADMIN = 0x8;
+
+// Cache the user's OAuth guild list briefly to avoid Discord 429s
+const ME_GUILDS_TTL_MS = 30 * 1000;
+const meGuildsCache =
+  globalThis.__wocMeGuildsCache || (globalThis.__wocMeGuildsCache = new Map());
+// key -> { exp:number, guilds:Array, warning?:string }
+
+function safeText(input, max = 220) {
+  const s = String(input || "").trim();
+  if (!s) return "";
+  const looksLikeHtml =
+    s.includes("<!DOCTYPE") || s.includes("<html") || s.includes("<body") || s.includes("<head");
+  if (looksLikeHtml) return "Non-JSON/HTML response received.";
+  return s.length > max ? s.slice(0, max) + "…" : s;
+}
+
+function isManageable(g) {
+  if (!g) return false;
+  const perms = Number(g.permissions || 0);
+  return !!g.owner || (perms & PERM_ADMIN) === PERM_ADMIN;
+}
+
+async function getMeGuilds(token) {
+  const userKey = token?.sub || token?.id || "me";
+  const cacheKey = `meGuilds:${userKey}`;
+  const now = Date.now();
+
+  const hit = meGuildsCache.get(cacheKey);
+  if (hit && hit.exp > now) return { guilds: hit.guilds, warning: hit.warning || "" };
+
+  const res = await fetch(`${DISCORD_API}/users/@me/guilds`, {
+    headers: { Authorization: `Bearer ${token.accessToken}` },
+    cache: "no-store",
+  });
+
+  // If rate limited, use stale cache if we have it; otherwise fail closed
+  if (res.status === 429) {
+    const body = await res.json().catch(() => ({}));
+    const retryAfter = Number(body?.retry_after || 1);
+
+    if (hit?.guilds?.length) {
+      return {
+        guilds: hit.guilds,
+        warning: `Discord rate-limited permission check. Using cached access (retry in ~${Math.ceil(retryAfter)}s).`,
+      };
+    }
+
+    const err = new Error(`Discord rate-limited permission check. Retry in ~${Math.ceil(retryAfter)}s.`);
+    err.status = 503;
+    err.retry_after = retryAfter;
+    throw err;
+  }
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    const err = new Error(safeText(`Failed to read your guilds: ${res.status} ${txt}`));
+    err.status = 503;
+    throw err;
+  }
+
+  const guilds = await res.json().catch(() => []);
+  meGuildsCache.set(cacheKey, { exp: now + ME_GUILDS_TTL_MS, guilds, warning: "" });
+  return { guilds, warning: "" };
+}
 
 export async function GET(req, { params }) {
   try {
-    const token = await getToken({
-      req,
-      secret: process.env.NEXTAUTH_SECRET,
-    });
+    const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
 
-    if (!token) {
+    // Soft response (200) so UI doesn’t look “broken”
+    if (!token?.accessToken) {
       return NextResponse.json(
-        { ok: false, installed: null, warning: "Not authenticated." },
+        { ok: true, installed: null, warning: "Sign in to check the server gate." },
         { status: 200 }
       );
     }
@@ -23,7 +86,24 @@ export async function GET(req, { params }) {
     const guildId = params?.guildId;
     if (!guildId) {
       return NextResponse.json(
-        { ok: false, installed: null, warning: "Missing guildId." },
+        { ok: true, installed: null, warning: "Missing guildId." },
+        { status: 200 }
+      );
+    }
+
+    // ✅ Permission check (fail closed). Prevents probing random guild IDs.
+    let permWarning = "";
+    const { guilds: meGuilds, warning } = await getMeGuilds(token);
+    permWarning = warning || "";
+
+    const target = (Array.isArray(meGuilds) ? meGuilds : []).find(
+      (g) => String(g.id) === String(guildId)
+    );
+
+    if (!isManageable(target)) {
+      // Soft 200 to keep UI pretty; but gate remains unknown
+      return NextResponse.json(
+        { ok: true, installed: null, warning: "You don’t have permission to manage this server." },
         { status: 200 }
       );
     }
@@ -31,7 +111,7 @@ export async function GET(req, { params }) {
     const botToken = process.env.DISCORD_BOT_TOKEN;
     if (!botToken) {
       return NextResponse.json(
-        { ok: false, installed: null, warning: "Missing DISCORD_BOT_TOKEN on server." },
+        { ok: true, installed: null, warning: "Server configuration missing (DISCORD_BOT_TOKEN)." },
         { status: 200 }
       );
     }
@@ -41,7 +121,7 @@ export async function GET(req, { params }) {
       cache: "no-store",
     });
 
-    // Soft-handle rate limit: don’t flip UI into “Error”
+    // Soft-handle rate limit
     if (botGuildRes.status === 429) {
       const body = await botGuildRes.json().catch(() => ({}));
       const retryAfter = Number(body?.retry_after || 1);
@@ -50,29 +130,48 @@ export async function GET(req, { params }) {
         {
           ok: true,
           installed: null,
-          warning: `Discord rate-limited the bot guild check. Retry in ~${Math.ceil(retryAfter)}s.`,
+          warning:
+            `Discord rate-limited the bot check. Try again in ~${Math.ceil(retryAfter)}s.` +
+            (permWarning ? ` (${permWarning})` : ""),
           retry_after: retryAfter,
         },
         { status: 200, headers: { "Retry-After": String(Math.ceil(retryAfter)) } }
       );
     }
 
+    // Not installed (or no access)
     if (botGuildRes.status === 403 || botGuildRes.status === 404) {
-      return NextResponse.json({ ok: true, installed: false, guildId }, { status: 200 });
+      return NextResponse.json(
+        { ok: true, installed: false, guildId, warning: permWarning || "" },
+        { status: 200 }
+      );
     }
 
     if (!botGuildRes.ok) {
       const txt = await botGuildRes.text().catch(() => "");
       return NextResponse.json(
-        { ok: true, installed: null, warning: `Bot guild check failed: ${botGuildRes.status} ${txt}`.trim() },
+        {
+          ok: true,
+          installed: null,
+          warning: safeText(`Bot guild check failed: ${botGuildRes.status} ${txt}`),
+        },
         { status: 200 }
       );
     }
 
-    return NextResponse.json({ ok: true, installed: true, guildId }, { status: 200 });
-  } catch (err) {
     return NextResponse.json(
-      { ok: true, installed: null, warning: err?.message || "Unknown error." },
+      { ok: true, installed: true, guildId, warning: permWarning || "" },
+      { status: 200 }
+    );
+  } catch (err) {
+    // Keep it soft so the UI doesn’t flash “error” vibes
+    return NextResponse.json(
+      {
+        ok: true,
+        installed: null,
+        warning: safeText(err?.message || "Gate check unavailable right now."),
+        retry_after: err?.retry_after ?? null,
+      },
       { status: 200 }
     );
   }
