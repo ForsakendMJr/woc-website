@@ -9,7 +9,7 @@ import { useWocTheme } from "../WocThemeProvider";
 const LS = { selectedGuild: "woc-selected-guild" };
 
 // ✅ Match YOUR actual route layout:
-const GUILDS_ENDPOINT = "/api/auth/discord/guilds";
+const GUILDS_ENDPOINT = "/api/discord/guilds";
 
 // ✅ Your other routes (as you pasted earlier)
 const STATUS_ENDPOINT = (gid) => `/api/guilds/${gid}/status`;
