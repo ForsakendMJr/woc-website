@@ -1,8 +1,11 @@
+// app/models/GuildSettings.js
 import mongoose from "mongoose";
 
-const GuildSettingsSchema = new mongoose.Schema(
+const { Schema } = mongoose;
+
+const GuildSettingsSchema = new Schema(
   {
-    guildId: { type: String, unique: true, index: true },
+    guildId: { type: String, required: true, unique: true, index: true },
 
     prefix: { type: String, default: "!" },
 
@@ -14,19 +17,36 @@ const GuildSettingsSchema = new mongoose.Schema(
     },
 
     logs: {
+      enabled: { type: Boolean, default: true },
       generalChannelId: { type: String, default: "" },
       modlogChannelId: { type: String, default: "" },
-      enabled: { type: Boolean, default: true },
+
+      joinChannelId: { type: String, default: "" },
+      leaveChannelId: { type: String, default: "" },
+      messageChannelId: { type: String, default: "" },
+      roleChannelId: { type: String, default: "" },
+      nicknameChannelId: { type: String, default: "" },
+      commandChannelId: { type: String, default: "" },
+      editChannelId: { type: String, default: "" },
     },
 
+    welcome: {
+      enabled: { type: Boolean, default: false },
+      channelId: { type: String, default: "" },
+      message: { type: String, default: "Welcome {user} to **{server}**! ✨" },
+      autoRoleId: { type: String, default: "" },
+    },
+
+    // Feature flags (category + sub-feature toggles)
+    modules: { type: Schema.Types.Mixed, default: {} },
+
     personality: {
-      mood: { type: String, default: "story" }, // story | battle | playful | omen | flustered
-      sass: { type: Number, default: 35 }, // 0-100
+      mood: { type: String, default: "story" },
+      sass: { type: Number, default: 35 },
       narration: { type: Boolean, default: true },
     },
   },
   { timestamps: true }
 );
 
-export default mongoose.models.GuildSettings ||
-  mongoose.model("GuildSettings", GuildSettingsSchema);
+export default mongoose.models.GuildSettings || mongoose.model("GuildSettings", GuildSettingsSchema);
