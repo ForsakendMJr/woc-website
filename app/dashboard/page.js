@@ -8,10 +8,8 @@ import { useWocTheme } from "../WocThemeProvider";
 
 const LS = { selectedGuild: "woc-selected-guild" };
 
-// ✅ Match YOUR actual route layout:
+// ✅ Your app routes (NOT NextAuth)
 const GUILDS_ENDPOINT = "/api/discord/guilds";
-
-// ✅ Your other routes (as you pasted earlier)
 const STATUS_ENDPOINT = (gid) => `/api/guilds/${gid}/status`;
 const SETTINGS_ENDPOINT = (gid) => `/api/guilds/${gid}/settings`;
 
@@ -32,10 +30,7 @@ function safeErrorMessage(input) {
   const msg = String(input || "").trim();
   if (!msg) return "";
   const looksLikeHtml =
-    msg.includes("<!DOCTYPE") ||
-    msg.includes("<html") ||
-    msg.includes("<body") ||
-    msg.includes("<head");
+    msg.includes("<!DOCTYPE") || msg.includes("<html") || msg.includes("<body") || msg.includes("<head");
   if (looksLikeHtml) return "Non-JSON/HTML response received (route missing or misrouted).";
   return msg.length > 260 ? msg.slice(0, 260) + "…" : msg;
 }
@@ -54,9 +49,7 @@ async function fetchJson(url, opts = {}) {
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    const e = new Error(
-      safeErrorMessage(data?.error || data?.warning || `Request failed (${res.status})`)
-    );
+    const e = new Error(safeErrorMessage(data?.error || data?.warning || `Request failed (${res.status})`));
     e.status = res.status;
     e.data = data;
     throw e;
@@ -81,18 +74,6 @@ function Pill({ tone = "default", children }) {
     <span className={cx("text-[0.72rem] px-2 py-1 rounded-full border", tones[tone] || tones.default)}>
       {children}
     </span>
-  );
-}
-
-function SoftNotice({ children }) {
-  if (!children) return null;
-  return (
-    <div className="mt-4 text-xs text-[var(--text-muted)]">
-      <span className="inline-flex items-center gap-2">
-        <span className="h-2 w-2 rounded-full bg-amber-400/70" />
-        <span>{children}</span>
-      </span>
-    </div>
   );
 }
 
@@ -335,10 +316,11 @@ export default function DashboardPage() {
         }
 
         const warn = safeErrorMessage(data.warning || data.error || "");
-        if (warn) setGuildWarn(warn);
+        if (warn && warn !== "Missing guildId.") setGuildWarn(warn);
       } catch (e) {
         if (e?.name === "AbortError") return;
-        setGuildWarn(safeErrorMessage(e?.message || "Failed to load guilds."));
+        const msg = safeErrorMessage(e?.message || "Failed to load guilds.");
+        if (msg && msg !== "Missing guildId.") setGuildWarn(msg);
       }
     })();
   }, [authed]);
@@ -346,9 +328,12 @@ export default function DashboardPage() {
   // On guild change: install gate + settings
   useEffect(() => {
     if (!authed) return;
-    if (!selectedGuildId) return;
 
-    safeSet(LS.selectedGuild, selectedGuildId);
+    // ✅ SUPER IMPORTANT: trim + guard
+    const gid = String(selectedGuildId || "").trim();
+    if (!gid) return;
+
+    safeSet(LS.selectedGuild, gid);
     setDirty(false);
 
     if (perGuildAbortRef.current) perGuildAbortRef.current.abort();
@@ -359,19 +344,21 @@ export default function DashboardPage() {
     setInstall((s) => ({ ...s, loading: true, warning: "" }));
     (async () => {
       try {
-        const data = await fetchJson(STATUS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
+        const data = await fetchJson(STATUS_ENDPOINT(gid), { cache: "no-store", signal: ac.signal });
         const warn = safeErrorMessage(data?.warning || "");
-        setInstall({ loading: false, installed: data?.installed ?? null, warning: warn });
+
+        setInstall({
+          loading: false,
+          installed: data?.installed ?? null,
+          warning: warn && warn !== "Missing guildId." ? warn : "",
+        });
 
         if (data?.installed === true) showToast("Gate open. WoC is present. ✨", "story");
         else if (data?.installed === false) showToast("Gate closed. Invite WoC to awaken controls. 🔒", "omen");
       } catch (e) {
         if (e?.name === "AbortError") return;
-        setInstall({
-          loading: false,
-          installed: null,
-          warning: safeErrorMessage(e?.message || "Gate check unavailable."),
-        });
+        const msg = safeErrorMessage(e?.message || "Gate check unavailable.");
+        setInstall({ loading: false, installed: null, warning: msg && msg !== "Missing guildId." ? msg : "" });
       }
     })();
 
@@ -381,12 +368,12 @@ export default function DashboardPage() {
 
     (async () => {
       try {
-        const data = await fetchJson(SETTINGS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
+        const data = await fetchJson(SETTINGS_ENDPOINT(gid), { cache: "no-store", signal: ac.signal });
         setSettings(data.settings);
       } catch (e) {
         if (e?.name === "AbortError") return;
         setSettings({
-          guildId: selectedGuildId,
+          guildId: gid,
           prefix: "!",
           moderation: { enabled: true, automod: false, antiLink: false, antiSpam: true },
           logs: { enabled: true, generalChannelId: "", modlogChannelId: "" },
@@ -399,10 +386,12 @@ export default function DashboardPage() {
   }, [authed, selectedGuildId]);
 
   async function saveSettings() {
-    if (!selectedGuildId || !settings) return;
+    const gid = String(selectedGuildId || "").trim();
+    if (!gid || !settings) return;
+
     setSettingsLoading(true);
     try {
-      const data = await fetchJson(SETTINGS_ENDPOINT(selectedGuildId), {
+      const data = await fetchJson(SETTINGS_ENDPOINT(gid), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(settings),
@@ -439,6 +428,11 @@ export default function DashboardPage() {
     ["personality", "Personality"],
     ["actionlog", "Action log"],
   ];
+
+  const showNotice = Boolean(
+    (guildWarn && guildWarn !== "Missing guildId.") ||
+      (install.warning && install.warning !== "Missing guildId.")
+  );
 
   return (
     <div className="max-w-7xl mx-auto px-6 lg:px-10 py-12">
@@ -505,12 +499,17 @@ export default function DashboardPage() {
                       {install.loading ? <Pill>Checking gate…</Pill> : null}
                       {install.installed === true ? <Pill tone="ok">Installed ✅</Pill> : null}
                       {install.installed === false ? <Pill tone="warn">Not installed 🔒</Pill> : null}
-                      {/* ✅ We no longer show “Notice ⚠️” as a badge. */}
+                      {showNotice ? <Pill tone="warn">Notice ⚠️</Pill> : null}
                     </div>
                   }
                 />
 
-                <SoftNotice>{guildWarn || ""}</SoftNotice>
+                {guildWarn && guildWarn !== "Missing guildId." ? (
+                  <div className="mt-4 text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
+                    <div className="font-semibold">Guild list notice</div>
+                    <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{guildWarn}</div>
+                  </div>
+                ) : null}
 
                 <div className="mt-4">
                   <GuildPicker
@@ -525,7 +524,12 @@ export default function DashboardPage() {
                   />
                 </div>
 
-                <SoftNotice>{install.warning || ""}</SoftNotice>
+                {install.warning && install.warning !== "Missing guildId." ? (
+                  <div className="mt-4 text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
+                    <div className="font-semibold">Gate notice</div>
+                    <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{install.warning}</div>
+                  </div>
+                ) : null}
 
                 {install.installed === false ? (
                   <div className="mt-4 woc-card p-4">
@@ -536,7 +540,7 @@ export default function DashboardPage() {
 
                     <a
                       className={cx("mt-3 inline-flex items-center gap-2 woc-btn-primary", !clientId ? "opacity-60 cursor-not-allowed" : "")}
-                      href={clientId ? inviteLinkForGuild(selectedGuildId) : undefined}
+                      href={clientId ? inviteLinkForGuild(String(selectedGuildId || "").trim()) : undefined}
                       target="_blank"
                       rel="noreferrer"
                       onClick={() => woc?.setMood?.("battle")}
@@ -572,7 +576,9 @@ export default function DashboardPage() {
 
                   <div className="text-[0.72rem] text-[var(--text-muted)]">
                     {gateInstalled
-                      ? dirty ? "WoC is watching. Commit the ritual." : "All quiet. No edits pending."
+                      ? dirty
+                        ? "WoC is watching. Commit the ritual."
+                        : "All quiet. No edits pending."
                       : "Gate closed. Invite WoC to enable editing."}
                   </div>
                 </div>
@@ -713,9 +719,7 @@ export default function DashboardPage() {
                                 >
                                   ⚙️ Settings
                                 </button>
-                                <div className="text-[0.72rem] text-[var(--text-muted)]">
-                                  {isCore ? "Editable" : "Preview"}
-                                </div>
+                                <div className="text-[0.72rem] text-[var(--text-muted)]">{isCore ? "Editable" : "Preview"}</div>
                               </div>
                             </div>
                           );
@@ -731,10 +735,7 @@ export default function DashboardPage() {
                   {/* MODERATION */}
                   {subtab === "moderation" ? (
                     <div className="space-y-4">
-                      <SectionTitle
-                        title="Moderation"
-                        subtitle="Toggle mod systems. Your bot should check these flags before executing commands."
-                      />
+                      <SectionTitle title="Moderation" subtitle="Toggle mod systems. Your bot should check these flags before executing commands." />
 
                       <div className="grid gap-3 sm:grid-cols-2">
                         {[
@@ -776,9 +777,7 @@ export default function DashboardPage() {
                       <div className="grid gap-3 sm:grid-cols-2">
                         <label className="woc-card p-4">
                           <div className="font-semibold text-sm">Enable logging</div>
-                          <div className="text-xs text-[var(--text-muted)] mt-1">
-                            If off, WoC stays quiet even when things happen.
-                          </div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">If off, WoC stays quiet even when things happen.</div>
                           <input
                             type="checkbox"
                             className="mt-3"
@@ -793,9 +792,7 @@ export default function DashboardPage() {
 
                         <label className="woc-card p-4">
                           <div className="font-semibold text-sm">Prefix</div>
-                          <div className="text-xs text-[var(--text-muted)] mt-1">
-                            Short, sharp, easy to type.
-                          </div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">Short, sharp, easy to type.</div>
                           <input
                             value={settings.prefix}
                             onChange={(e) => {
@@ -817,9 +814,7 @@ export default function DashboardPage() {
 
                         <label className="woc-card p-4">
                           <div className="font-semibold text-sm">General log channel ID</div>
-                          <div className="text-xs text-[var(--text-muted)] mt-1">
-                            Joins/leaves, milestones, economy events (later).
-                          </div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">Joins/leaves, milestones, economy events (later).</div>
                           <input
                             value={settings.logs.generalChannelId}
                             onChange={(e) => {
@@ -839,9 +834,7 @@ export default function DashboardPage() {
 
                         <label className="woc-card p-4">
                           <div className="font-semibold text-sm">Modlog channel ID</div>
-                          <div className="text-xs text-[var(--text-muted)] mt-1">
-                            Bans/kicks/mutes/warns and staff actions.
-                          </div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">Bans/kicks/mutes/warns and staff actions.</div>
                           <input
                             value={settings.logs.modlogChannelId}
                             onChange={(e) => {
@@ -865,17 +858,12 @@ export default function DashboardPage() {
                   {/* PERSONALITY */}
                   {subtab === "personality" ? (
                     <div className="space-y-4">
-                      <SectionTitle
-                        title="WoC personality"
-                        subtitle="Make the bot feel like a narrator, a rival, or a calm system voice."
-                      />
+                      <SectionTitle title="WoC personality" subtitle="Make the bot feel like a narrator, a rival, or a calm system voice." />
 
                       <div className="grid gap-3 sm:grid-cols-2">
                         <label className="woc-card p-4">
                           <div className="font-semibold text-sm">Mood</div>
-                          <div className="text-xs text-[var(--text-muted)] mt-1">
-                            Influences dashboard vibe now, and bot responses later.
-                          </div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">Influences dashboard vibe now, and bot responses later.</div>
 
                           <select
                             value={settings.personality.mood}
@@ -895,16 +883,16 @@ export default function DashboardPage() {
                             "
                           >
                             {["neutral", "battle", "playful", "story", "omen", "flustered"].map((m) => (
-                              <option key={m} value={m}>{m}</option>
+                              <option key={m} value={m}>
+                                {m}
+                              </option>
                             ))}
                           </select>
                         </label>
 
                         <label className="woc-card p-4">
                           <div className="font-semibold text-sm">Sass level</div>
-                          <div className="text-xs text-[var(--text-muted)] mt-1">
-                            0 = polite librarian, 100 = chaotic bard.
-                          </div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">0 = polite librarian, 100 = chaotic bard.</div>
 
                           <input
                             type="range"
@@ -930,9 +918,7 @@ export default function DashboardPage() {
                         <label className="woc-card p-4 flex items-start justify-between gap-3 cursor-pointer sm:col-span-2">
                           <div>
                             <div className="font-semibold text-sm">Narration mode</div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">
-                              Adds story flavor to announcements and logs (later: bot output style).
-                            </div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">Adds story flavor to announcements and logs (later: bot output style).</div>
                           </div>
 
                           <input
@@ -956,10 +942,7 @@ export default function DashboardPage() {
                   {/* ACTION LOG */}
                   {subtab === "actionlog" ? (
                     <div className="space-y-3">
-                      <SectionTitle
-                        title="Action log"
-                        subtitle="Soon: admin actions, toggles changed, mod events (from bot/webhook)."
-                      />
+                      <SectionTitle title="Action log" subtitle="Soon: admin actions, toggles changed, mod events (from bot/webhook)." />
                       <div className="woc-card p-4 text-sm text-[var(--text-muted)]">
                         No entries yet. The chronicle is empty… suspiciously peaceful.
                       </div>
