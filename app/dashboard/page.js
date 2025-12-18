@@ -25,6 +25,20 @@ function safeSet(key, val) {
     localStorage.setItem(key, val);
   } catch {}
 }
+function safeDel(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch {}
+}
+
+function sanitizeGuildId(raw) {
+  const s = String(raw ?? "").trim();
+  if (!s) return "";
+  if (s === "undefined" || s === "null" || s === "NaN") return "";
+  // discord snowflake-ish check (not strict, just prevents garbage)
+  if (!/^\d{5,25}$/.test(s)) return "";
+  return s;
+}
 
 function safeErrorMessage(input) {
   const msg = String(input || "").trim();
@@ -63,6 +77,16 @@ async function fetchJson(url, opts = {}) {
 
 function cx(...parts) {
   return parts.filter(Boolean).join(" ");
+}
+
+function cloneDeep(obj) {
+  try {
+    // modern browsers
+    return structuredClone(obj);
+  } catch {
+    // safe fallback (fine for plain settings objects)
+    return JSON.parse(JSON.stringify(obj ?? {}));
+  }
 }
 
 function Pill({ tone = "default", children }) {
@@ -387,8 +411,9 @@ const MODULE_TREE = [
 ];
 
 function ensureDefaultSettings(selectedGuildId) {
-  return {
-    guildId: selectedGuildId,
+  const gid = sanitizeGuildId(selectedGuildId);
+  const base = {
+    guildId: gid,
     prefix: "!",
     moderation: { enabled: true, automod: false, antiLink: false, antiSpam: true },
     logs: {
@@ -409,6 +434,7 @@ function ensureDefaultSettings(selectedGuildId) {
       message: "Welcome {user} to **{server}**! ✨",
       autoRoleId: "",
     },
+    // IMPORTANT: enable defaults for keys that ACTUALLY exist
     modules: MODULE_TREE.reduce((acc, cat) => {
       acc[cat.key] = {
         enabled: cat.key === "moderation" || cat.key === "logging" || cat.key === "utility",
@@ -421,6 +447,8 @@ function ensureDefaultSettings(selectedGuildId) {
     }, {}),
     personality: { mood: "story", sass: 35, narration: true },
   };
+
+  return base;
 }
 
 export default function DashboardPage() {
@@ -437,7 +465,10 @@ export default function DashboardPage() {
 
   const [guilds, setGuilds] = useState([]);
   const [guildWarn, setGuildWarn] = useState("");
-  const [selectedGuildId, setSelectedGuildId] = useState(() => safeGet(LS.selectedGuild, ""));
+
+  const [selectedGuildId, setSelectedGuildId] = useState(() =>
+    sanitizeGuildId(safeGet(LS.selectedGuild, ""))
+  );
 
   const selectedGuild = useMemo(
     () => guilds.find((g) => String(g.id) === String(selectedGuildId)) || null,
@@ -485,6 +516,13 @@ export default function DashboardPage() {
     };
   }, []);
 
+  // If localStorage had junk, wipe it once
+  useEffect(() => {
+    const raw = safeGet(LS.selectedGuild, "");
+    const clean = sanitizeGuildId(raw);
+    if (raw && !clean) safeDel(LS.selectedGuild);
+  }, []);
+
   // Load manageable guilds (once per authed session)
   useEffect(() => {
     if (!authed) {
@@ -504,19 +542,22 @@ export default function DashboardPage() {
     (async () => {
       try {
         setGuildWarn("");
+
         const data = await fetchJson(GUILDS_ENDPOINT, { cache: "no-store", signal: ac.signal });
         const list = Array.isArray(data.guilds) ? data.guilds : [];
-
         if (list.length) setGuilds(list);
 
-        const saved = safeGet(LS.selectedGuild, "");
-        const exists = list.find((g) => String(g.id) === String(saved));
+        const saved = sanitizeGuildId(safeGet(LS.selectedGuild, ""));
+        const exists = saved ? list.find((g) => String(g.id) === String(saved)) : null;
         const first = list[0]?.id || "";
-        const pick = exists ? saved : String(first || "");
+        const pick = exists ? saved : sanitizeGuildId(String(first || ""));
 
         if (pick) {
           setSelectedGuildId(pick);
           safeSet(LS.selectedGuild, pick);
+        } else {
+          setSelectedGuildId("");
+          safeDel(LS.selectedGuild);
         }
 
         const warn = safeErrorMessage(data.warning || data.error || "");
@@ -531,9 +572,17 @@ export default function DashboardPage() {
   // On guild change: install gate + settings
   useEffect(() => {
     if (!authed) return;
-    if (!selectedGuildId) return;
 
-    safeSet(LS.selectedGuild, selectedGuildId);
+    const gid = sanitizeGuildId(selectedGuildId);
+    if (!gid) {
+      // no valid guild selected yet: keep UI calm
+      setInstall({ loading: false, installed: null, warning: "" });
+      setSettings(null);
+      setSettingsLoading(false);
+      return;
+    }
+
+    safeSet(LS.selectedGuild, gid);
     setDirty(false);
 
     if (perGuildAbortRef.current) perGuildAbortRef.current.abort();
@@ -544,7 +593,7 @@ export default function DashboardPage() {
     setInstall((s) => ({ ...s, loading: true, warning: "" }));
     (async () => {
       try {
-        const data = await fetchJson(STATUS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
+        const data = await fetchJson(STATUS_ENDPOINT(gid), { cache: "no-store", signal: ac.signal });
         const warn = safeErrorMessage(data?.warning || "");
         setInstall({ loading: false, installed: data?.installed ?? null, warning: warn });
 
@@ -552,7 +601,11 @@ export default function DashboardPage() {
         else if (data?.installed === false) showToast("Gate closed. Invite WoC to awaken controls. 🔒", "omen");
       } catch (e) {
         if (e?.name === "AbortError") return;
-        setInstall({ loading: false, installed: null, warning: safeErrorMessage(e?.message || "Gate check unavailable.") });
+        setInstall({
+          loading: false,
+          installed: null,
+          warning: safeErrorMessage(e?.message || "Gate check unavailable."),
+        });
       }
     })();
 
@@ -562,11 +615,14 @@ export default function DashboardPage() {
 
     (async () => {
       try {
-        const data = await fetchJson(SETTINGS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
-        setSettings(data.settings);
+        const data = await fetchJson(SETTINGS_ENDPOINT(gid), { cache: "no-store", signal: ac.signal });
+        // ensure baseline keys exist even if DB doc is older
+        const merged = { ...ensureDefaultSettings(gid), ...(data?.settings || {}) };
+        merged.guildId = gid;
+        setSettings(merged);
       } catch (e) {
         if (e?.name === "AbortError") return;
-        setSettings(ensureDefaultSettings(selectedGuildId));
+        setSettings(ensureDefaultSettings(gid));
       } finally {
         if (!ac.signal.aborted) setSettingsLoading(false);
       }
@@ -574,15 +630,21 @@ export default function DashboardPage() {
   }, [authed, selectedGuildId]);
 
   async function saveSettings() {
-    if (!selectedGuildId || !settings) return;
+    const gid = sanitizeGuildId(selectedGuildId);
+    if (!gid || !settings) return;
+
     setSettingsLoading(true);
     try {
-      const data = await fetchJson(SETTINGS_ENDPOINT(selectedGuildId), {
+      const payload = { ...settings, guildId: gid };
+      const data = await fetchJson(SETTINGS_ENDPOINT(gid), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(settings),
+        body: JSON.stringify(payload),
       });
-      setSettings(data.settings);
+      const merged = { ...ensureDefaultSettings(gid), ...(data?.settings || {}) };
+      merged.guildId = gid;
+
+      setSettings(merged);
       setDirty(false);
       showToast("Settings sealed. ✅", "playful");
     } catch (e) {
@@ -625,12 +687,16 @@ export default function DashboardPage() {
     const q = moduleSearch.trim().toLowerCase();
     const subs = activeCategory?.subs || [];
     if (!q) return subs;
-    return subs.filter((s) => (s.label + " " + s.desc).toLowerCase().includes(q) || s.key.toLowerCase().includes(q));
+    return subs.filter(
+      (s) =>
+        (s.label + " " + s.desc).toLowerCase().includes(q) ||
+        s.key.toLowerCase().includes(q)
+    );
   }, [activeCategory, moduleSearch]);
 
   function setModuleEnabled(categoryKey, enabled) {
     setSettings((prev) => {
-      const next = structuredClone(prev);
+      const next = cloneDeep(prev);
       next.modules ||= {};
       next.modules[categoryKey] ||= { enabled: false, subs: {} };
       next.modules[categoryKey].enabled = !!enabled;
@@ -641,7 +707,7 @@ export default function DashboardPage() {
 
   function setSubEnabled(categoryKey, subKey, enabled) {
     setSettings((prev) => {
-      const next = structuredClone(prev);
+      const next = cloneDeep(prev);
       next.modules ||= {};
       next.modules[categoryKey] ||= { enabled: true, subs: {} };
       next.modules[categoryKey].subs ||= {};
@@ -699,7 +765,10 @@ export default function DashboardPage() {
 
             <div className="woc-card p-5">
               <SectionTitle title="Step 2: Sign in" subtitle="Sign in with Discord so we can see what you manage." />
-              <button onClick={() => signIn("discord")} className="mt-4 inline-flex w-full justify-center items-center gap-2 woc-btn-ghost">
+              <button
+                onClick={() => signIn("discord")}
+                className="mt-4 inline-flex w-full justify-center items-center gap-2 woc-btn-ghost"
+              >
                 Sign in with Discord <span>🔐</span>
               </button>
             </div>
@@ -735,7 +804,9 @@ export default function DashboardPage() {
                     value={selectedGuildId}
                     disabled={!guilds.length}
                     onChange={(gid) => {
-                      setSelectedGuildId(gid);
+                      const clean = sanitizeGuildId(gid);
+                      if (!clean) return;
+                      setSelectedGuildId(clean);
                       setSubtab("overview");
                       woc?.setMood?.("story");
                     }}
@@ -757,7 +828,10 @@ export default function DashboardPage() {
                     </div>
 
                     <a
-                      className={cx("mt-3 inline-flex items-center gap-2 woc-btn-primary", !clientId ? "opacity-60 cursor-not-allowed" : "")}
+                      className={cx(
+                        "mt-3 inline-flex items-center gap-2 woc-btn-primary",
+                        !clientId ? "opacity-60 cursor-not-allowed" : ""
+                      )}
                       href={clientId ? inviteLinkForGuild(selectedGuildId) : undefined}
                       target="_blank"
                       rel="noreferrer"
@@ -768,9 +842,13 @@ export default function DashboardPage() {
                     </a>
 
                     {!clientId ? (
-                      <div className="mt-2 text-[0.72rem] text-rose-200/90">Missing NEXT_PUBLIC_DISCORD_CLIENT_ID. Add it to Vercel env and redeploy.</div>
+                      <div className="mt-2 text-[0.72rem] text-rose-200/90">
+                        Missing NEXT_PUBLIC_DISCORD_CLIENT_ID. Add it to Vercel env and redeploy.
+                      </div>
                     ) : (
-                      <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">Once invited, refresh this page. Gate opens automatically.</div>
+                      <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
+                        Once invited, refresh this page. Gate opens automatically.
+                      </div>
                     )}
                   </div>
                 ) : null}
@@ -781,7 +859,10 @@ export default function DashboardPage() {
                 <SectionTitle title="Control seal" subtitle="Changes persist per server." />
                 <div className="mt-4 flex flex-col gap-2">
                   <button
-                    className={cx("woc-btn-primary", !gateInstalled || !dirty || settingsLoading ? "opacity-60 cursor-not-allowed" : "")}
+                    className={cx(
+                      "woc-btn-primary",
+                      !gateInstalled || !dirty || settingsLoading ? "opacity-60 cursor-not-allowed" : ""
+                    )}
                     disabled={!gateInstalled || !dirty || settingsLoading}
                     onClick={saveSettings}
                     title={!gateInstalled ? "Invite WoC to unlock saving." : !dirty ? "No changes yet." : "Save changes"}
@@ -790,13 +871,17 @@ export default function DashboardPage() {
                   </button>
 
                   <div className="text-[0.72rem] text-[var(--text-muted)]">
-                    {gateInstalled ? (dirty ? "WoC is watching. Commit the ritual." : "All quiet. No edits pending.") : "Gate closed. Invite WoC to enable editing."}
+                    {gateInstalled
+                      ? dirty
+                        ? "WoC is watching. Commit the ritual."
+                        : "All quiet. No edits pending."
+                      : "Gate closed. Invite WoC to enable editing."}
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Servers grid (nice quick switch, like your reference image vibe) */}
+            {/* Servers grid */}
             <div className="mt-6 woc-card p-5">
               <SectionTitle title="Servers" subtitle={`Servers you can manage (${guilds.length})`} />
               <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -807,7 +892,9 @@ export default function DashboardPage() {
                       key={g.id}
                       type="button"
                       onClick={() => {
-                        setSelectedGuildId(String(g.id));
+                        const clean = sanitizeGuildId(g.id);
+                        if (!clean) return;
+                        setSelectedGuildId(clean);
                         setSubtab("overview");
                         woc?.setMood?.("story");
                       }}
@@ -831,11 +918,13 @@ export default function DashboardPage() {
               </div>
 
               {guilds.length > 12 ? (
-                <div className="mt-3 text-[0.72rem] text-[var(--text-muted)]">Showing 12. Use the selector for the full list.</div>
+                <div className="mt-3 text-[0.72rem] text-[var(--text-muted)]">
+                  Showing 12. Use the selector for the full list.
+                </div>
               ) : null}
             </div>
 
-            {/* Secondary navbar */}
+            {/* Secondary navbar + panels */}
             <div className="mt-6 woc-card p-5">
               <div className="flex flex-wrap gap-2">
                 {subnav.map(([k, label]) => (
@@ -858,12 +947,19 @@ export default function DashboardPage() {
                 ))}
               </div>
 
-              {!gateInstalled ? (
-                <div className="mt-4 text-sm text-[var(--text-muted)]">Invite WoC to this server to unlock the dashboard systems.</div>
-              ) : settingsLoading || !settings ? (
+              {settingsLoading || !settings ? (
                 <div className="mt-4 text-sm text-[var(--text-muted)]">Loading settings…</div>
               ) : (
                 <div className="mt-5">
+                  {!gateInstalled ? (
+                    <div className="mb-4 text-sm text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
+                      <div className="font-semibold">Gate is closed</div>
+                      <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">
+                        You can browse and configure panels, but saving is locked until WoC is invited to this server.
+                      </div>
+                    </div>
+                  ) : null}
+
                   {/* OVERVIEW */}
                   {subtab === "overview" ? (
                     <div className="grid gap-4 lg:grid-cols-3">
@@ -893,13 +989,17 @@ export default function DashboardPage() {
 
                       <div className="woc-card p-4">
                         <div className="font-semibold">WoC whisper</div>
-                        <div className="text-xs text-[var(--text-muted)] mt-2">“A server is a living map. Modules are the weather. Choose wisely.”</div>
-                        <div className="mt-3 text-[0.72rem] text-[var(--text-muted)]">Next step: wire bot runtime to respect these flags.</div>
+                        <div className="text-xs text-[var(--text-muted)] mt-2">
+                          “A server is a living map. Modules are the weather. Choose wisely.”
+                        </div>
+                        <div className="mt-3 text-[0.72rem] text-[var(--text-muted)]">
+                          Next step: wire bot runtime to respect these flags.
+                        </div>
                       </div>
                     </div>
                   ) : null}
 
-                  {/* MODULES (sidebar like your reference image) */}
+                  {/* MODULES */}
                   {subtab === "modules" ? (
                     <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
                       <div className="woc-card p-4">
@@ -934,7 +1034,14 @@ export default function DashboardPage() {
                                     </div>
                                     <div className="text-[0.72rem] text-[var(--text-muted)] mt-1 truncate">{cat.desc}</div>
                                   </div>
-                                  <span className={cx("text-[0.72rem] px-2 py-1 rounded-full border", enabled ? "border-emerald-400/40 bg-emerald-500/10 text-emerald-100" : "border-amber-400/40 bg-amber-500/10 text-amber-100")}>
+                                  <span
+                                    className={cx(
+                                      "text-[0.72rem] px-2 py-1 rounded-full border",
+                                      enabled
+                                        ? "border-emerald-400/40 bg-emerald-500/10 text-emerald-100"
+                                        : "border-amber-400/40 bg-amber-500/10 text-amber-100"
+                                    )}
+                                  >
                                     {enabled ? "On" : "Off"}
                                   </span>
                                 </div>
@@ -992,7 +1099,12 @@ export default function DashboardPage() {
                                   <div className="min-w-0">
                                     <div className="font-semibold truncate">{s.label}</div>
                                     <div className="text-xs text-[var(--text-muted)] mt-1">{s.desc}</div>
-                                    <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">Key: <span className="font-semibold text-[var(--text-main)]">{activeCategory.key}.{s.key}</span></div>
+                                    <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
+                                      Key:{" "}
+                                      <span className="font-semibold text-[var(--text-main)]">
+                                        {activeCategory.key}.{s.key}
+                                      </span>
+                                    </div>
                                   </div>
 
                                   <label className="inline-flex items-center gap-2">
@@ -1020,7 +1132,8 @@ export default function DashboardPage() {
                         </div>
 
                         <div className="mt-4 text-[0.72rem] text-[var(--text-muted)]">
-                          This panel controls feature flags. Next step is wiring your bot to read <b>settings.modules</b> and block/allow commands accordingly.
+                          This panel controls feature flags. Next step is wiring your bot to read{" "}
+                          <b>settings.modules</b> and block/allow commands accordingly.
                         </div>
                       </div>
                     </div>
@@ -1081,7 +1194,9 @@ export default function DashboardPage() {
                         ].map(([k, label]) => (
                           <label key={k} className="woc-card p-4">
                             <div className="font-semibold text-sm">{label}</div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">Paste a channel ID (you’ll add a channel picker later).</div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">
+                              Paste a channel ID (you’ll add a channel picker later).
+                            </div>
                             <input
                               value={settings.logs?.[k] || ""}
                               onChange={(e) => {
@@ -1167,7 +1282,9 @@ export default function DashboardPage() {
 
                         <label className="woc-card p-4 sm:col-span-2">
                           <div className="font-semibold text-sm">Auto role ID</div>
-                          <div className="text-xs text-[var(--text-muted)] mt-1">Optional: role to assign to new members.</div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">
+                            Optional: role to assign to new members.
+                          </div>
                           <input
                             value={settings.welcome?.autoRoleId || ""}
                             onChange={(e) => {
@@ -1188,7 +1305,7 @@ export default function DashboardPage() {
                     </div>
                   ) : null}
 
-                  {/* MODERATION (simple switches, your deeper stuff can expand later) */}
+                  {/* MODERATION */}
                   {subtab === "moderation" ? (
                     <div className="space-y-4">
                       <SectionTitle title="Moderation" subtitle="Toggle mod systems." />
@@ -1210,7 +1327,10 @@ export default function DashboardPage() {
                               className="mt-1"
                               checked={!!settings.moderation?.[key]}
                               onChange={(e) => {
-                                setSettings((s) => ({ ...s, moderation: { ...s.moderation, [key]: e.target.checked } }));
+                                setSettings((s) => ({
+                                  ...s,
+                                  moderation: { ...s.moderation, [key]: e.target.checked },
+                                }));
                                 setDirty(true);
                                 woc?.setMood?.(e.target.checked ? "battle" : "story");
                               }}
@@ -1229,7 +1349,9 @@ export default function DashboardPage() {
                       <div className="grid gap-3 sm:grid-cols-2">
                         <label className="woc-card p-4">
                           <div className="font-semibold text-sm">Mood</div>
-                          <div className="text-xs text-[var(--text-muted)] mt-1">Influences dashboard vibe now (and bot responses later).</div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">
+                            Influences dashboard vibe now (and bot responses later).
+                          </div>
 
                           <select
                             value={settings.personality?.mood || "story"}
@@ -1266,7 +1388,10 @@ export default function DashboardPage() {
                             max="100"
                             value={Number(settings.personality?.sass ?? 35)}
                             onChange={(e) => {
-                              setSettings((s) => ({ ...s, personality: { ...s.personality, sass: Number(e.target.value) } }));
+                              setSettings((s) => ({
+                                ...s,
+                                personality: { ...s.personality, sass: Number(e.target.value) },
+                              }));
                               setDirty(true);
                               woc?.setMood?.("playful");
                             }}
@@ -1274,14 +1399,19 @@ export default function DashboardPage() {
                           />
 
                           <div className="mt-2 text-xs text-[var(--text-muted)]">
-                            Current: <span className="font-semibold text-[var(--text-main)]">{Number(settings.personality?.sass ?? 35)}</span>
+                            Current:{" "}
+                            <span className="font-semibold text-[var(--text-main)]">
+                              {Number(settings.personality?.sass ?? 35)}
+                            </span>
                           </div>
                         </label>
 
                         <label className="woc-card p-4 flex items-start justify-between gap-3 cursor-pointer sm:col-span-2">
                           <div>
                             <div className="font-semibold text-sm">Narration mode</div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">Adds story flavor to announcements/logs (later: bot output style).</div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">
+                              Adds story flavor to announcements/logs (later: bot output style).
+                            </div>
                           </div>
 
                           <input
@@ -1289,7 +1419,10 @@ export default function DashboardPage() {
                             className="mt-1"
                             checked={!!settings.personality?.narration}
                             onChange={(e) => {
-                              setSettings((s) => ({ ...s, personality: { ...s.personality, narration: e.target.checked } }));
+                              setSettings((s) => ({
+                                ...s,
+                                personality: { ...s.personality, narration: e.target.checked },
+                              }));
                               setDirty(true);
                               woc?.setMood?.(e.target.checked ? "story" : "neutral");
                             }}
@@ -1299,11 +1432,16 @@ export default function DashboardPage() {
                     </div>
                   ) : null}
 
-                  {/* ACTION LOG (stub) */}
+                  {/* ACTION LOG */}
                   {subtab === "actionlog" ? (
                     <div className="space-y-3">
-                      <SectionTitle title="Action log" subtitle="Soon: admin actions, toggles changed, mod events (from bot/webhook)." />
-                      <div className="woc-card p-4 text-sm text-[var(--text-muted)]">No entries yet. The chronicle is empty… suspiciously peaceful.</div>
+                      <SectionTitle
+                        title="Action log"
+                        subtitle="Soon: admin actions, toggles changed, mod events (from bot/webhook)."
+                      />
+                      <div className="woc-card p-4 text-sm text-[var(--text-muted)]">
+                        No entries yet. The chronicle is empty… suspiciously peaceful.
+                      </div>
                     </div>
                   ) : null}
                 </div>
