@@ -15,29 +15,19 @@ const SETTINGS_ENDPOINT = (gid) => `/api/guilds/${gid}/settings`;
 
 function safeGet(key, fallback = "") {
   try {
-    return localStorage.getItem(key) ?? fallback;
+    const v = localStorage.getItem(key);
+    if (v == null) return fallback;
+    // Guard against accidental "undefined"/"null" strings
+    if (v === "undefined" || v === "null") return fallback;
+    return v;
   } catch {
     return fallback;
   }
 }
 function safeSet(key, val) {
   try {
-    localStorage.setItem(key, val);
+    localStorage.setItem(key, String(val ?? ""));
   } catch {}
-}
-function safeDel(key) {
-  try {
-    localStorage.removeItem(key);
-  } catch {}
-}
-
-function sanitizeGuildId(raw) {
-  const s = String(raw ?? "").trim();
-  if (!s) return "";
-  if (s === "undefined" || s === "null" || s === "NaN") return "";
-  // discord snowflake-ish check (not strict, just prevents garbage)
-  if (!/^\d{5,25}$/.test(s)) return "";
-  return s;
 }
 
 function safeErrorMessage(input) {
@@ -77,16 +67,6 @@ async function fetchJson(url, opts = {}) {
 
 function cx(...parts) {
   return parts.filter(Boolean).join(" ");
-}
-
-function cloneDeep(obj) {
-  try {
-    // modern browsers
-    return structuredClone(obj);
-  } catch {
-    // safe fallback (fine for plain settings objects)
-    return JSON.parse(JSON.stringify(obj ?? {}));
-  }
 }
 
 function Pill({ tone = "default", children }) {
@@ -410,10 +390,9 @@ const MODULE_TREE = [
   },
 ];
 
-function ensureDefaultSettings(selectedGuildId) {
-  const gid = sanitizeGuildId(selectedGuildId);
-  const base = {
-    guildId: gid,
+function ensureDefaultSettings(guildId) {
+  return {
+    guildId,
     prefix: "!",
     moderation: { enabled: true, automod: false, antiLink: false, antiSpam: true },
     logs: {
@@ -434,7 +413,6 @@ function ensureDefaultSettings(selectedGuildId) {
       message: "Welcome {user} to **{server}**! ✨",
       autoRoleId: "",
     },
-    // IMPORTANT: enable defaults for keys that ACTUALLY exist
     modules: MODULE_TREE.reduce((acc, cat) => {
       acc[cat.key] = {
         enabled: cat.key === "moderation" || cat.key === "logging" || cat.key === "utility",
@@ -447,8 +425,6 @@ function ensureDefaultSettings(selectedGuildId) {
     }, {}),
     personality: { mood: "story", sass: 35, narration: true },
   };
-
-  return base;
 }
 
 export default function DashboardPage() {
@@ -465,10 +441,14 @@ export default function DashboardPage() {
 
   const [guilds, setGuilds] = useState([]);
   const [guildWarn, setGuildWarn] = useState("");
+  const [selectedGuildIdRaw, setSelectedGuildIdRaw] = useState(() => safeGet(LS.selectedGuild, ""));
 
-  const [selectedGuildId, setSelectedGuildId] = useState(() =>
-    sanitizeGuildId(safeGet(LS.selectedGuild, ""))
-  );
+  // ✅ Only treat a guildId as “selected” if it exists in the fetched guild list.
+  const selectedGuildId = useMemo(() => {
+    if (!guilds.length) return "";
+    const exists = guilds.some((g) => String(g.id) === String(selectedGuildIdRaw));
+    return exists ? String(selectedGuildIdRaw) : String(guilds[0]?.id || "");
+  }, [guilds, selectedGuildIdRaw]);
 
   const selectedGuild = useMemo(
     () => guilds.find((g) => String(g.id) === String(selectedGuildId)) || null,
@@ -477,11 +457,11 @@ export default function DashboardPage() {
 
   const [install, setInstall] = useState({
     loading: false,
-    installed: null,
+    installed: null, // true/false/null
     warning: "",
   });
 
-  const [subtab, setSubtab] = useState("overview"); // overview | modules | logs | welcome | moderation | personality | actionlog
+  const [subtab, setSubtab] = useState("overview");
   const [toast, setToast] = useState("");
   const toastTimer = useRef(null);
 
@@ -516,13 +496,6 @@ export default function DashboardPage() {
     };
   }, []);
 
-  // If localStorage had junk, wipe it once
-  useEffect(() => {
-    const raw = safeGet(LS.selectedGuild, "");
-    const clean = sanitizeGuildId(raw);
-    if (raw && !clean) safeDel(LS.selectedGuild);
-  }, []);
-
   // Load manageable guilds (once per authed session)
   useEffect(() => {
     if (!authed) {
@@ -542,23 +515,10 @@ export default function DashboardPage() {
     (async () => {
       try {
         setGuildWarn("");
-
         const data = await fetchJson(GUILDS_ENDPOINT, { cache: "no-store", signal: ac.signal });
         const list = Array.isArray(data.guilds) ? data.guilds : [];
+
         if (list.length) setGuilds(list);
-
-        const saved = sanitizeGuildId(safeGet(LS.selectedGuild, ""));
-        const exists = saved ? list.find((g) => String(g.id) === String(saved)) : null;
-        const first = list[0]?.id || "";
-        const pick = exists ? saved : sanitizeGuildId(String(first || ""));
-
-        if (pick) {
-          setSelectedGuildId(pick);
-          safeSet(LS.selectedGuild, pick);
-        } else {
-          setSelectedGuildId("");
-          safeDel(LS.selectedGuild);
-        }
 
         const warn = safeErrorMessage(data.warning || data.error || "");
         if (warn) setGuildWarn(warn);
@@ -569,20 +529,18 @@ export default function DashboardPage() {
     })();
   }, [authed]);
 
-  // On guild change: install gate + settings
+  // ✅ When we finally have a real selectedGuildId, persist it (prevents “Missing guildId” on reload)
   useEffect(() => {
     if (!authed) return;
+    if (!selectedGuildId) return;
+    safeSet(LS.selectedGuild, selectedGuildId);
+  }, [authed, selectedGuildId]);
 
-    const gid = sanitizeGuildId(selectedGuildId);
-    if (!gid) {
-      // no valid guild selected yet: keep UI calm
-      setInstall({ loading: false, installed: null, warning: "" });
-      setSettings(null);
-      setSettingsLoading(false);
-      return;
-    }
+  // On guild change: install gate + settings (ONLY when selectedGuildId is valid)
+  useEffect(() => {
+    if (!authed) return;
+    if (!selectedGuildId) return;
 
-    safeSet(LS.selectedGuild, gid);
     setDirty(false);
 
     if (perGuildAbortRef.current) perGuildAbortRef.current.abort();
@@ -593,8 +551,12 @@ export default function DashboardPage() {
     setInstall((s) => ({ ...s, loading: true, warning: "" }));
     (async () => {
       try {
-        const data = await fetchJson(STATUS_ENDPOINT(gid), { cache: "no-store", signal: ac.signal });
-        const warn = safeErrorMessage(data?.warning || "");
+        const data = await fetchJson(STATUS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
+
+        // Suppress the one message you keep seeing (it happens when calls fire without a real gid)
+        const rawWarn = safeErrorMessage(data?.warning || "");
+        const warn = rawWarn === "Missing guildId." ? "" : rawWarn;
+
         setInstall({ loading: false, installed: data?.installed ?? null, warning: warn });
 
         if (data?.installed === true) showToast("Gate open. WoC is present. ✨", "story");
@@ -615,14 +577,11 @@ export default function DashboardPage() {
 
     (async () => {
       try {
-        const data = await fetchJson(SETTINGS_ENDPOINT(gid), { cache: "no-store", signal: ac.signal });
-        // ensure baseline keys exist even if DB doc is older
-        const merged = { ...ensureDefaultSettings(gid), ...(data?.settings || {}) };
-        merged.guildId = gid;
-        setSettings(merged);
+        const data = await fetchJson(SETTINGS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
+        setSettings(data.settings);
       } catch (e) {
         if (e?.name === "AbortError") return;
-        setSettings(ensureDefaultSettings(gid));
+        setSettings(ensureDefaultSettings(selectedGuildId));
       } finally {
         if (!ac.signal.aborted) setSettingsLoading(false);
       }
@@ -630,21 +589,15 @@ export default function DashboardPage() {
   }, [authed, selectedGuildId]);
 
   async function saveSettings() {
-    const gid = sanitizeGuildId(selectedGuildId);
-    if (!gid || !settings) return;
-
+    if (!selectedGuildId || !settings) return;
     setSettingsLoading(true);
     try {
-      const payload = { ...settings, guildId: gid };
-      const data = await fetchJson(SETTINGS_ENDPOINT(gid), {
+      const data = await fetchJson(SETTINGS_ENDPOINT(selectedGuildId), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(settings),
       });
-      const merged = { ...ensureDefaultSettings(gid), ...(data?.settings || {}) };
-      merged.guildId = gid;
-
-      setSettings(merged);
+      setSettings(data.settings);
       setDirty(false);
       showToast("Settings sealed. ✅", "playful");
     } catch (e) {
@@ -687,16 +640,12 @@ export default function DashboardPage() {
     const q = moduleSearch.trim().toLowerCase();
     const subs = activeCategory?.subs || [];
     if (!q) return subs;
-    return subs.filter(
-      (s) =>
-        (s.label + " " + s.desc).toLowerCase().includes(q) ||
-        s.key.toLowerCase().includes(q)
-    );
+    return subs.filter((s) => (s.label + " " + s.desc).toLowerCase().includes(q) || s.key.toLowerCase().includes(q));
   }, [activeCategory, moduleSearch]);
 
   function setModuleEnabled(categoryKey, enabled) {
     setSettings((prev) => {
-      const next = cloneDeep(prev);
+      const next = structuredClone(prev);
       next.modules ||= {};
       next.modules[categoryKey] ||= { enabled: false, subs: {} };
       next.modules[categoryKey].enabled = !!enabled;
@@ -707,7 +656,7 @@ export default function DashboardPage() {
 
   function setSubEnabled(categoryKey, subKey, enabled) {
     setSettings((prev) => {
-      const next = cloneDeep(prev);
+      const next = structuredClone(prev);
       next.modules ||= {};
       next.modules[categoryKey] ||= { enabled: true, subs: {} };
       next.modules[categoryKey].subs ||= {};
@@ -716,6 +665,8 @@ export default function DashboardPage() {
     });
     setDirty(true);
   }
+
+  const showNoticePill = !!(guildWarn || install.warning);
 
   return (
     <div className="max-w-7xl mx-auto px-6 lg:px-10 py-12">
@@ -786,7 +737,7 @@ export default function DashboardPage() {
                       {install.loading ? <Pill>Checking gate…</Pill> : null}
                       {install.installed === true ? <Pill tone="ok">Installed ✅</Pill> : null}
                       {install.installed === false ? <Pill tone="warn">Not installed 🔒</Pill> : null}
-                      {guildWarn || install.warning ? <Pill tone="warn">Notice ⚠️</Pill> : null}
+                      {showNoticePill ? <Pill tone="warn">Notice ⚠️</Pill> : null}
                     </div>
                   }
                 />
@@ -804,11 +755,10 @@ export default function DashboardPage() {
                     value={selectedGuildId}
                     disabled={!guilds.length}
                     onChange={(gid) => {
-                      const clean = sanitizeGuildId(gid);
-                      if (!clean) return;
-                      setSelectedGuildId(clean);
+                      setSelectedGuildIdRaw(String(gid));
                       setSubtab("overview");
                       woc?.setMood?.("story");
+                      setModuleSearch("");
                     }}
                   />
                 </div>
@@ -830,9 +780,9 @@ export default function DashboardPage() {
                     <a
                       className={cx(
                         "mt-3 inline-flex items-center gap-2 woc-btn-primary",
-                        !clientId ? "opacity-60 cursor-not-allowed" : ""
+                        !clientId || !selectedGuildId ? "opacity-60 cursor-not-allowed" : ""
                       )}
-                      href={clientId ? inviteLinkForGuild(selectedGuildId) : undefined}
+                      href={clientId && selectedGuildId ? inviteLinkForGuild(selectedGuildId) : undefined}
                       target="_blank"
                       rel="noreferrer"
                       onClick={() => woc?.setMood?.("battle")}
@@ -892,11 +842,10 @@ export default function DashboardPage() {
                       key={g.id}
                       type="button"
                       onClick={() => {
-                        const clean = sanitizeGuildId(g.id);
-                        if (!clean) return;
-                        setSelectedGuildId(clean);
+                        setSelectedGuildIdRaw(String(g.id));
                         setSubtab("overview");
                         woc?.setMood?.("story");
+                        setModuleSearch("");
                       }}
                       className={cx(
                         "text-left rounded-3xl overflow-hidden border transition",
@@ -924,7 +873,7 @@ export default function DashboardPage() {
               ) : null}
             </div>
 
-            {/* Secondary navbar + panels */}
+            {/* Secondary navbar */}
             <div className="mt-6 woc-card p-5">
               <div className="flex flex-wrap gap-2">
                 {subnav.map(([k, label]) => (
@@ -947,19 +896,19 @@ export default function DashboardPage() {
                 ))}
               </div>
 
+              {!gateInstalled ? (
+                <div className="mt-4 text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
+                  <div className="font-semibold">Gate is closed</div>
+                  <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">
+                    You can browse and configure panels, but saving is locked until WoC is invited to this server.
+                  </div>
+                </div>
+              ) : null}
+
               {settingsLoading || !settings ? (
                 <div className="mt-4 text-sm text-[var(--text-muted)]">Loading settings…</div>
               ) : (
                 <div className="mt-5">
-                  {!gateInstalled ? (
-                    <div className="mb-4 text-sm text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
-                      <div className="font-semibold">Gate is closed</div>
-                      <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">
-                        You can browse and configure panels, but saving is locked until WoC is invited to this server.
-                      </div>
-                    </div>
-                  ) : null}
-
                   {/* OVERVIEW */}
                   {subtab === "overview" ? (
                     <div className="grid gap-4 lg:grid-cols-3">
@@ -1108,7 +1057,9 @@ export default function DashboardPage() {
                                   </div>
 
                                   <label className="inline-flex items-center gap-2">
-                                    <span className="text-[0.72rem] text-[var(--text-muted)]">{subEnabled ? "On" : "Off"}</span>
+                                    <span className="text-[0.72rem] text-[var(--text-muted)]">
+                                      {subEnabled ? "On" : "Off"}
+                                    </span>
                                     <input
                                       type="checkbox"
                                       checked={!!subEnabled}
@@ -1282,9 +1233,7 @@ export default function DashboardPage() {
 
                         <label className="woc-card p-4 sm:col-span-2">
                           <div className="font-semibold text-sm">Auto role ID</div>
-                          <div className="text-xs text-[var(--text-muted)] mt-1">
-                            Optional: role to assign to new members.
-                          </div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">Optional: role to assign to new members.</div>
                           <input
                             value={settings.welcome?.autoRoleId || ""}
                             onChange={(e) => {
