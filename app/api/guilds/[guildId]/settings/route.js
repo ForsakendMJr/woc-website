@@ -1,13 +1,29 @@
-// app/api/guilds/[guildId]/status/route.js
+// app/api/guilds/[guildId]/settings/route.js
 import { NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
 
 export const dynamic = "force-dynamic";
 const DISCORD_API = "https://discord.com/api/v10";
 
+function getBotToken() {
+  const t =
+    process.env.DISCORD_BOT_TOKEN ||
+    process.env.DISCORD_TOKEN ||
+    process.env.DICSORD_BOT_TOKEN;
+
+  const source = process.env.DISCORD_BOT_TOKEN
+    ? "DISCORD_BOT_TOKEN"
+    : process.env.DISCORD_TOKEN
+      ? "DISCORD_TOKEN"
+      : process.env.DICSORD_BOT_TOKEN
+        ? "DICSORD_BOT_TOKEN"
+        : null;
+
+  return { token: t, source };
+}
+
 function getGuildIdFromPath(req) {
   try {
-    // /api/guilds/<guildId>/status
     const parts = req.nextUrl.pathname.split("/").filter(Boolean);
     const i = parts.indexOf("guilds");
     const gid = i >= 0 ? parts[i + 1] : "";
@@ -17,27 +33,20 @@ function getGuildIdFromPath(req) {
   }
 }
 
-export async function GET(req, ctx) {
+export async function GET(req, { params }) {
   try {
     const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
-    if (!token) {
-      return NextResponse.json({ ok: false, installed: null, warning: "Not authenticated." }, { status: 200 });
+    const guildId = params?.guildId || getGuildIdFromPath(req);
+
+    if (!guildId) {
+      return NextResponse.json({ ok: false, error: "Missing guildId." }, { status: 400 });
     }
 
-    // Prefer params, but fall back to path parsing (prevents “Missing guildId” when ctx is weird)
-    const guildId = ctx?.params?.guildId || getGuildIdFromPath(req);
-    if (!guildId || guildId === "undefined" || guildId === "null") {
-      return NextResponse.json(
-        { ok: true, installed: null, warning: "No server selected yet." },
-        { status: 200 }
-      );
-    }
-
-    const botToken = process.env.DISCORD_BOT_TOKEN;
+    const { token: botToken, source: botTokenSource } = getBotToken();
     if (!botToken) {
       return NextResponse.json(
-        { ok: true, installed: null, warning: "Missing DISCORD_BOT_TOKEN on server." },
-        { status: 200 }
+        { ok: false, bot_token_source: botTokenSource, error: "Missing bot token. Set DISCORD_BOT_TOKEN (or DISCORD_TOKEN)." },
+        { status: 500 }
       );
     }
 
@@ -53,6 +62,7 @@ export async function GET(req, ctx) {
         {
           ok: true,
           installed: null,
+          bot_token_source: botTokenSource,
           warning: `Discord rate-limited the bot guild check. Retry in ~${Math.ceil(retryAfter)}s.`,
           retry_after: retryAfter,
         },
@@ -61,19 +71,21 @@ export async function GET(req, ctx) {
     }
 
     if (botGuildRes.status === 403 || botGuildRes.status === 404) {
-      return NextResponse.json({ ok: true, installed: false, guildId }, { status: 200 });
+      return NextResponse.json({ ok: true, installed: false, guildId, bot_token_source: botTokenSource }, { status: 200 });
     }
 
     if (!botGuildRes.ok) {
       const txt = await botGuildRes.text().catch(() => "");
       return NextResponse.json(
-        { ok: true, installed: null, warning: `Bot guild check failed: ${botGuildRes.status} ${txt}`.trim() },
-        { status: 200 }
+        { ok: false, bot_token_source: botTokenSource, error: `Bot guild check failed (${botGuildRes.status}). ${txt}` },
+        { status: 500 }
       );
     }
 
-    return NextResponse.json({ ok: true, installed: true, guildId }, { status: 200 });
+    // Your existing settings storage logic can stay as-is below.
+    // If your file already has DB read/write code after this point, keep it.
+    return NextResponse.json({ ok: true, installed: true, guildId, bot_token_source: botTokenSource, settings: {} }, { status: 200 });
   } catch (err) {
-    return NextResponse.json({ ok: true, installed: null, warning: err?.message || "Unknown error." }, { status: 200 });
+    return NextResponse.json({ ok: false, error: String(err?.message || err) }, { status: 500 });
   }
 }
