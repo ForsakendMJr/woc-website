@@ -12,6 +12,18 @@ const ME_GUILDS_TTL_MS = 30 * 1000;
 const meGuildsCache =
   globalThis.__wocMeGuildsCache || (globalThis.__wocMeGuildsCache = new Map());
 
+function getGuildIdFromPath(req) {
+  try {
+    const parts = req.nextUrl.pathname.split("/").filter(Boolean);
+    // expected: api / guilds / {guildId} / status
+    const i = parts.indexOf("guilds");
+    const gid = i >= 0 ? parts[i + 1] : "";
+    return gid || "";
+  } catch {
+    return "";
+  }
+}
+
 function getBotToken() {
   const t =
     process.env.DISCORD_BOT_TOKEN ||
@@ -60,7 +72,9 @@ async function getMeGuilds(token) {
     if (hit?.guilds?.length) {
       return {
         guilds: hit.guilds,
-        warning: `Discord rate-limited your guild list. Using cached list (~${Math.ceil(retryAfter)}s).`,
+        warning: `Discord rate-limited your guild list. Using cached list for now (~${Math.ceil(
+          retryAfter
+        )}s).`,
       };
     }
 
@@ -84,7 +98,7 @@ async function getMeGuilds(token) {
   return { guilds, warning: "" };
 }
 
-export async function GET(req, { params }) {
+export async function GET(req, ctx) {
   try {
     const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
 
@@ -95,7 +109,9 @@ export async function GET(req, { params }) {
       );
     }
 
-    const guildId = params?.guildId;
+    // ✅ Fix: allow both ctx.params and parsing from URL
+    const guildId = ctx?.params?.guildId || getGuildIdFromPath(req);
+
     if (!guildId) {
       return NextResponse.json(
         { ok: true, installed: null, warning: "Missing guildId." },
@@ -126,20 +142,19 @@ export async function GET(req, { params }) {
           ok: true,
           installed: null,
           bot_token_source: botTokenSource,
-          warning: "Server bot token missing. Set DISCORD_BOT_TOKEN (or DISCORD_TOKEN).",
+          warning: "Server bot token missing on server. Set DISCORD_BOT_TOKEN (or DISCORD_TOKEN).",
         },
         { status: 200 }
       );
     }
 
-    // ✅ Reliable check: ask the bot what guilds it is in
-    const botGuildsRes = await fetch(`${DISCORD_API}/users/@me/guilds`, {
+    const botGuildRes = await fetch(`${DISCORD_API}/guilds/${guildId}`, {
       headers: { Authorization: `Bot ${botToken}` },
       cache: "no-store",
     });
 
-    if (botGuildsRes.status === 429) {
-      const body = await botGuildsRes.json().catch(() => ({}));
+    if (botGuildRes.status === 429) {
+      const body = await botGuildRes.json().catch(() => ({}));
       const retryAfter = Number(body?.retry_after || 1);
 
       return NextResponse.json(
@@ -148,7 +163,7 @@ export async function GET(req, { params }) {
           installed: null,
           bot_token_source: botTokenSource,
           warning:
-            `Discord rate-limited the bot guild list. Try again in ~${Math.ceil(retryAfter)}s.` +
+            `Discord rate-limited the bot check. Try again in ~${Math.ceil(retryAfter)}s.` +
             (permWarning ? ` (${permWarning})` : ""),
           retry_after: retryAfter,
         },
@@ -156,25 +171,28 @@ export async function GET(req, { params }) {
       );
     }
 
-    if (!botGuildsRes.ok) {
-      const txt = await botGuildsRes.text().catch(() => "");
+    if (botGuildRes.status === 403 || botGuildRes.status === 404) {
+      return NextResponse.json(
+        { ok: true, installed: false, guildId, bot_token_source: botTokenSource, warning: permWarning || "" },
+        { status: 200 }
+      );
+    }
+
+    if (!botGuildRes.ok) {
+      const txt = await botGuildRes.text().catch(() => "");
       return NextResponse.json(
         {
           ok: true,
           installed: null,
           bot_token_source: botTokenSource,
-          warning: safeText(`Bot guild list failed: ${botGuildsRes.status} ${txt}`),
+          warning: safeText(`Bot check failed: ${botGuildRes.status} ${txt}`),
         },
         { status: 200 }
       );
     }
 
-    const botGuilds = await botGuildsRes.json().catch(() => []);
-    const installed =
-      Array.isArray(botGuilds) && botGuilds.some((g) => String(g?.id) === String(guildId));
-
     return NextResponse.json(
-      { ok: true, installed, guildId, bot_token_source: botTokenSource, warning: permWarning || "" },
+      { ok: true, installed: true, guildId, bot_token_source: botTokenSource, warning: permWarning || "" },
       { status: 200 }
     );
   } catch (err) {
