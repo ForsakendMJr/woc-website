@@ -11,10 +11,8 @@ const PERM_ADMIN = 0x8;
 const ME_GUILDS_TTL_MS = 30 * 1000;
 const meGuildsCache =
   globalThis.__wocMeGuildsCache || (globalThis.__wocMeGuildsCache = new Map());
-// key -> { exp:number, guilds:Array, warning?:string }
 
 function getBotToken() {
-  // Support common env names (and one frequent typo) without leaking the token
   const t =
     process.env.DISCORD_BOT_TOKEN ||
     process.env.DISCORD_TOKEN ||
@@ -55,7 +53,6 @@ async function getMeGuilds(token) {
     cache: "no-store",
   });
 
-  // If rate limited, use stale cache if we have it; otherwise fail closed
   if (res.status === 429) {
     const body = await res.json().catch(() => ({}));
     const retryAfter = Number(body?.retry_after || 1);
@@ -63,9 +60,7 @@ async function getMeGuilds(token) {
     if (hit?.guilds?.length) {
       return {
         guilds: hit.guilds,
-        warning: `Discord rate-limited your guild list. Using cached list for now (~${Math.ceil(
-          retryAfter
-        )}s).`,
+        warning: `Discord rate-limited your guild list. Using cached list (~${Math.ceil(retryAfter)}s).`,
       };
     }
 
@@ -93,7 +88,6 @@ export async function GET(req, { params }) {
   try {
     const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
 
-    // Soft response (200) so UI doesn’t look “broken”
     if (!token?.accessToken) {
       return NextResponse.json(
         { ok: true, installed: null, warning: "Sign in to check the server gate." },
@@ -110,7 +104,9 @@ export async function GET(req, { params }) {
     }
 
     const { guilds: myGuilds, warning: permWarning } = await getMeGuilds(token);
-    const meGuild = (Array.isArray(myGuilds) ? myGuilds : []).find((g) => String(g?.id) === String(guildId));
+    const meGuild = (Array.isArray(myGuilds) ? myGuilds : []).find(
+      (g) => String(g?.id) === String(guildId)
+    );
 
     if (!meGuild || !isManageable(meGuild)) {
       return NextResponse.json(
@@ -130,20 +126,20 @@ export async function GET(req, { params }) {
           ok: true,
           installed: null,
           bot_token_source: botTokenSource,
-          warning: "Server bot token missing on server. Set DISCORD_BOT_TOKEN (or DISCORD_TOKEN).",
+          warning: "Server bot token missing. Set DISCORD_BOT_TOKEN (or DISCORD_TOKEN).",
         },
         { status: 200 }
       );
     }
 
-    const botGuildRes = await fetch(`${DISCORD_API}/guilds/${guildId}`, {
+    // ✅ Reliable check: ask the bot what guilds it is in
+    const botGuildsRes = await fetch(`${DISCORD_API}/users/@me/guilds`, {
       headers: { Authorization: `Bot ${botToken}` },
       cache: "no-store",
     });
 
-    // Soft-handle rate limit
-    if (botGuildRes.status === 429) {
-      const body = await botGuildRes.json().catch(() => ({}));
+    if (botGuildsRes.status === 429) {
+      const body = await botGuildsRes.json().catch(() => ({}));
       const retryAfter = Number(body?.retry_after || 1);
 
       return NextResponse.json(
@@ -152,7 +148,7 @@ export async function GET(req, { params }) {
           installed: null,
           bot_token_source: botTokenSource,
           warning:
-            `Discord rate-limited the bot check. Try again in ~${Math.ceil(retryAfter)}s.` +
+            `Discord rate-limited the bot guild list. Try again in ~${Math.ceil(retryAfter)}s.` +
             (permWarning ? ` (${permWarning})` : ""),
           retry_after: retryAfter,
         },
@@ -160,33 +156,28 @@ export async function GET(req, { params }) {
       );
     }
 
-    // Not installed (or no access)
-    if (botGuildRes.status === 403 || botGuildRes.status === 404) {
-      return NextResponse.json(
-        { ok: true, installed: false, guildId, bot_token_source: botTokenSource, warning: permWarning || "" },
-        { status: 200 }
-      );
-    }
-
-    if (!botGuildRes.ok) {
-      const txt = await botGuildRes.text().catch(() => "");
+    if (!botGuildsRes.ok) {
+      const txt = await botGuildsRes.text().catch(() => "");
       return NextResponse.json(
         {
           ok: true,
           installed: null,
           bot_token_source: botTokenSource,
-          warning: safeText(`Bot check failed: ${botGuildRes.status} ${txt}`),
+          warning: safeText(`Bot guild list failed: ${botGuildsRes.status} ${txt}`),
         },
         { status: 200 }
       );
     }
 
+    const botGuilds = await botGuildsRes.json().catch(() => []);
+    const installed =
+      Array.isArray(botGuilds) && botGuilds.some((g) => String(g?.id) === String(guildId));
+
     return NextResponse.json(
-      { ok: true, installed: true, guildId, bot_token_source: botTokenSource, warning: permWarning || "" },
+      { ok: true, installed, guildId, bot_token_source: botTokenSource, warning: permWarning || "" },
       { status: 200 }
     );
   } catch (err) {
-    // Keep it soft so the UI doesn’t flash “error” vibes
     return NextResponse.json(
       {
         ok: true,

@@ -17,16 +17,19 @@ function safeGet(key, fallback = "") {
   try {
     const v = localStorage.getItem(key);
     if (v == null) return fallback;
-    // Guard against accidental "undefined"/"null" strings
-    if (v === "undefined" || v === "null") return fallback;
+    if (v === "undefined" || v === "null" || v === "[object Object]") return fallback;
     return v;
   } catch {
     return fallback;
   }
 }
+
 function safeSet(key, val) {
   try {
-    localStorage.setItem(key, String(val ?? ""));
+    const s = String(val ?? "").trim();
+    // Reject obvious bad values
+    if (!s || s === "undefined" || s === "null" || s === "[object Object]") return;
+    localStorage.setItem(key, s);
   } catch {}
 }
 
@@ -56,7 +59,9 @@ async function fetchJson(url, opts = {}) {
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    const e = new Error(safeErrorMessage(data?.error || data?.warning || `Request failed (${res.status})`));
+    const e = new Error(
+      safeErrorMessage(data?.error || data?.warning || `Request failed (${res.status})`)
+    );
     e.status = res.status;
     e.data = data;
     throw e;
@@ -100,10 +105,12 @@ function guildIconUrl(guild) {
   if (!guild?.id || !guild?.icon) return "";
   return `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.png?size=128`;
 }
+
 function initials(name = "?") {
   const parts = String(name).trim().split(/\s+/).slice(0, 2);
   return parts.map((p) => p[0]?.toUpperCase()).join("") || "?";
 }
+
 function IconCircle({ guild, size = 40 }) {
   const url = guildIconUrl(guild);
   const label = initials(guild?.name || "?");
@@ -127,6 +134,7 @@ function IconCircle({ guild, size = 40 }) {
 function GuildPicker({ guilds, value, onChange, disabled }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
+
   const selected = useMemo(
     () => guilds.find((g) => String(g.id) === String(value)) || null,
     [guilds, value]
@@ -214,7 +222,6 @@ function GuildPicker({ guilds, value, onChange, disabled }) {
 
 /**
  * Modules based on your command folders.
- * Each category has sub-modules that map to “features” you’ll wire later.
  */
 const MODULE_TREE = [
   {
@@ -373,7 +380,7 @@ const MODULE_TREE = [
       { key: "titles", label: "Titles", desc: "Titles system." },
       { key: "premium", label: "Premium", desc: "Premium tools." },
       { key: "wochelp", label: "WoC Help", desc: "Help menu." },
-      { key: "tutorial", label: "Tutorial", desc: "Tutorials." },
+      { key: "tutorial", label: "Tutorials", desc: "Tutorials." },
       { key: "setprefix", label: "Set Prefix", desc: "Prefix management." },
       { key: "eventstatus", label: "Event Status", desc: "Status reads." },
       { key: "clantutorial", label: "Clan Tutorial", desc: "Clan tutorials." },
@@ -446,8 +453,9 @@ export default function DashboardPage() {
   // ✅ Only treat a guildId as “selected” if it exists in the fetched guild list.
   const selectedGuildId = useMemo(() => {
     if (!guilds.length) return "";
-    const exists = guilds.some((g) => String(g.id) === String(selectedGuildIdRaw));
-    return exists ? String(selectedGuildIdRaw) : String(guilds[0]?.id || "");
+    const raw = String(selectedGuildIdRaw || "").trim();
+    const exists = raw && guilds.some((g) => String(g.id) === raw);
+    return exists ? raw : String(guilds[0]?.id || "");
   }, [guilds, selectedGuildIdRaw]);
 
   const selectedGuild = useMemo(
@@ -488,6 +496,14 @@ export default function DashboardPage() {
     toastTimer.current = setTimeout(() => setToast(""), 2200);
   }
 
+  // ✅ One function to rule them all: set selection + persist immediately
+  function setSelectedGuildIdSafe(gid) {
+    const id = String(gid ?? "").trim();
+    if (!id || id === "undefined" || id === "null" || id === "[object Object]") return;
+    setSelectedGuildIdRaw(id);
+    safeSet(LS.selectedGuild, id);
+  }
+
   useEffect(() => {
     return () => {
       if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -518,7 +534,13 @@ export default function DashboardPage() {
         const data = await fetchJson(GUILDS_ENDPOINT, { cache: "no-store", signal: ac.signal });
         const list = Array.isArray(data.guilds) ? data.guilds : [];
 
-        if (list.length) setGuilds(list);
+        setGuilds(list);
+
+        // ✅ If localStorage was empty/invalid, auto-select first guild and persist
+        if (list.length && (!selectedGuildIdRaw || selectedGuildIdRaw === "undefined" || selectedGuildIdRaw === "null")) {
+          const first = String(list[0].id);
+          setSelectedGuildIdSafe(first);
+        }
 
         const warn = safeErrorMessage(data.warning || data.error || "");
         if (warn) setGuildWarn(warn);
@@ -527,9 +549,10 @@ export default function DashboardPage() {
         setGuildWarn(safeErrorMessage(e?.message || "Failed to load guilds."));
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed]);
 
-  // ✅ When we finally have a real selectedGuildId, persist it (prevents “Missing guildId” on reload)
+  // ✅ When we finally have a real selectedGuildId, persist it (prevents weird reloads)
   useEffect(() => {
     if (!authed) return;
     if (!selectedGuildId) return;
@@ -553,7 +576,6 @@ export default function DashboardPage() {
       try {
         const data = await fetchJson(STATUS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
 
-        // Suppress the one message you keep seeing (it happens when calls fire without a real gid)
         const rawWarn = safeErrorMessage(data?.warning || "");
         const warn = rawWarn === "Missing guildId." ? "" : rawWarn;
 
@@ -614,12 +636,12 @@ export default function DashboardPage() {
     mood === "battle"
       ? "Pick a panel. Flip the switches. Let’s duel the chaos."
       : mood === "omen"
-      ? "Warnings in the fog. Not fatal. Just dramatic weather."
-      : mood === "flustered"
-      ? "Too many servers, not enough hands. We cope."
-      : mood === "playful"
-      ? "Twist the dials. Watch the server react."
-      : "This is the control room. Quiet power lives here.";
+        ? "Warnings in the fog. Not fatal. Just dramatic weather."
+        : mood === "flustered"
+          ? "Too many servers, not enough hands. We cope."
+          : mood === "playful"
+            ? "Twist the dials. Watch the server react."
+            : "This is the control room. Quiet power lives here.";
 
   const subnav = [
     ["overview", "Overview"],
@@ -755,7 +777,7 @@ export default function DashboardPage() {
                     value={selectedGuildId}
                     disabled={!guilds.length}
                     onChange={(gid) => {
-                      setSelectedGuildIdRaw(String(gid));
+                      setSelectedGuildIdSafe(gid);
                       setSubtab("overview");
                       woc?.setMood?.("story");
                       setModuleSearch("");
@@ -842,7 +864,7 @@ export default function DashboardPage() {
                       key={g.id}
                       type="button"
                       onClick={() => {
-                        setSelectedGuildIdRaw(String(g.id));
+                        setSelectedGuildIdSafe(g.id);
                         setSubtab("overview");
                         woc?.setMood?.("story");
                         setModuleSearch("");

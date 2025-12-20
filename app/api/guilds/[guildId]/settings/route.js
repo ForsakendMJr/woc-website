@@ -22,22 +22,16 @@ function getBotToken() {
   return { token: t, source };
 }
 
-function getGuildIdFromPath(req) {
-  try {
-    const parts = req.nextUrl.pathname.split("/").filter(Boolean);
-    const i = parts.indexOf("guilds");
-    const gid = i >= 0 ? parts[i + 1] : "";
-    return gid || "";
-  } catch {
-    return "";
-  }
+function safeText(input, max = 220) {
+  const s = String(input || "").trim();
+  return s.length > max ? s.slice(0, max) + "…" : s;
 }
 
 export async function GET(req, { params }) {
   try {
-    const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
-    const guildId = params?.guildId || getGuildIdFromPath(req);
+    await getToken({ req, secret: process.env.NEXTAUTH_SECRET }); // keep auth hook if you want it
 
+    const guildId = params?.guildId;
     if (!guildId) {
       return NextResponse.json({ ok: false, error: "Missing guildId." }, { status: 400 });
     }
@@ -50,41 +44,44 @@ export async function GET(req, { params }) {
       );
     }
 
-    const botGuildRes = await fetch(`${DISCORD_API}/guilds/${guildId}`, {
+    // ✅ Same reliable check: bot guild list
+    const botGuildsRes = await fetch(`${DISCORD_API}/users/@me/guilds`, {
       headers: { Authorization: `Bot ${botToken}` },
       cache: "no-store",
     });
 
-    if (botGuildRes.status === 429) {
-      const body = await botGuildRes.json().catch(() => ({}));
+    if (botGuildsRes.status === 429) {
+      const body = await botGuildsRes.json().catch(() => ({}));
       const retryAfter = Number(body?.retry_after || 1);
       return NextResponse.json(
         {
           ok: true,
           installed: null,
           bot_token_source: botTokenSource,
-          warning: `Discord rate-limited the bot guild check. Retry in ~${Math.ceil(retryAfter)}s.`,
+          warning: `Discord rate-limited the bot guild list. Retry in ~${Math.ceil(retryAfter)}s.`,
           retry_after: retryAfter,
         },
         { status: 200, headers: { "Retry-After": String(Math.ceil(retryAfter)) } }
       );
     }
 
-    if (botGuildRes.status === 403 || botGuildRes.status === 404) {
-      return NextResponse.json({ ok: true, installed: false, guildId, bot_token_source: botTokenSource }, { status: 200 });
-    }
-
-    if (!botGuildRes.ok) {
-      const txt = await botGuildRes.text().catch(() => "");
+    if (!botGuildsRes.ok) {
+      const txt = await botGuildsRes.text().catch(() => "");
       return NextResponse.json(
-        { ok: false, bot_token_source: botTokenSource, error: `Bot guild check failed (${botGuildRes.status}). ${txt}` },
+        { ok: false, bot_token_source: botTokenSource, error: safeText(`Bot guild list failed (${botGuildsRes.status}). ${txt}`) },
         { status: 500 }
       );
     }
 
-    // Your existing settings storage logic can stay as-is below.
-    // If your file already has DB read/write code after this point, keep it.
-    return NextResponse.json({ ok: true, installed: true, guildId, bot_token_source: botTokenSource, settings: {} }, { status: 200 });
+    const botGuilds = await botGuildsRes.json().catch(() => []);
+    const installed =
+      Array.isArray(botGuilds) && botGuilds.some((g) => String(g?.id) === String(guildId));
+
+    // Keep your DB logic later. For now return defaults.
+    return NextResponse.json(
+      { ok: true, installed, guildId, bot_token_source: botTokenSource, settings: {} },
+      { status: 200 }
+    );
   } catch (err) {
     return NextResponse.json({ ok: false, error: String(err?.message || err) }, { status: 500 });
   }
