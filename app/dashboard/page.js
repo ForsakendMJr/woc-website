@@ -12,24 +12,22 @@ const LS = { selectedGuild: "woc-selected-guild" };
 const GUILDS_ENDPOINT = "/api/discord/guilds";
 const STATUS_ENDPOINT = (gid) => `/api/guilds/${gid}/status`;
 const SETTINGS_ENDPOINT = (gid) => `/api/guilds/${gid}/settings`;
+const CHANNELS_ENDPOINT = (gid) => `/api/guilds/${gid}/channels`;
 
 function safeGet(key, fallback = "") {
   try {
     const v = localStorage.getItem(key);
     if (v == null) return fallback;
-    if (v === "undefined" || v === "null" || v === "[object Object]") return fallback;
+    // Guard against accidental "undefined"/"null" strings
+    if (v === "undefined" || v === "null") return fallback;
     return v;
   } catch {
     return fallback;
   }
 }
-
 function safeSet(key, val) {
   try {
-    const s = String(val ?? "").trim();
-    // Reject obvious bad values
-    if (!s || s === "undefined" || s === "null" || s === "[object Object]") return;
-    localStorage.setItem(key, s);
+    localStorage.setItem(key, String(val ?? ""));
   } catch {}
 }
 
@@ -105,12 +103,10 @@ function guildIconUrl(guild) {
   if (!guild?.id || !guild?.icon) return "";
   return `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.png?size=128`;
 }
-
 function initials(name = "?") {
   const parts = String(name).trim().split(/\s+/).slice(0, 2);
   return parts.map((p) => p[0]?.toUpperCase()).join("") || "?";
 }
-
 function IconCircle({ guild, size = 40 }) {
   const url = guildIconUrl(guild);
   const label = initials(guild?.name || "?");
@@ -134,7 +130,6 @@ function IconCircle({ guild, size = 40 }) {
 function GuildPicker({ guilds, value, onChange, disabled }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
-
   const selected = useMemo(
     () => guilds.find((g) => String(g.id) === String(value)) || null,
     [guilds, value]
@@ -220,8 +215,38 @@ function GuildPicker({ guilds, value, onChange, disabled }) {
   );
 }
 
+/** Channel picker (replaces manual ID inputs) */
+function channelLabel(ch) {
+  if (!ch) return "";
+  return `#${ch.name}`;
+}
+function ChannelPicker({ channels, value, onChange, disabled, placeholder = "Select a channel…" }) {
+  return (
+    <select
+      value={value || ""}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}
+      className="
+        mt-3 w-full px-3 py-2 rounded-2xl
+        border border-[var(--border-subtle)]/70
+        bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+        text-[var(--text-main)]
+        outline-none
+      "
+    >
+      <option value="">{placeholder}</option>
+      {channels.map((ch) => (
+        <option key={ch.id} value={ch.id}>
+          {channelLabel(ch)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 /**
  * Modules based on your command folders.
+ * Each category has sub-modules that map to “features” you’ll wire later.
  */
 const MODULE_TREE = [
   {
@@ -380,7 +405,7 @@ const MODULE_TREE = [
       { key: "titles", label: "Titles", desc: "Titles system." },
       { key: "premium", label: "Premium", desc: "Premium tools." },
       { key: "wochelp", label: "WoC Help", desc: "Help menu." },
-      { key: "tutorial", label: "Tutorials", desc: "Tutorials." },
+      { key: "tutorial", label: "Tutorial", desc: "Tutorials." },
       { key: "setprefix", label: "Set Prefix", desc: "Prefix management." },
       { key: "eventstatus", label: "Event Status", desc: "Status reads." },
       { key: "clantutorial", label: "Clan Tutorial", desc: "Clan tutorials." },
@@ -453,9 +478,8 @@ export default function DashboardPage() {
   // ✅ Only treat a guildId as “selected” if it exists in the fetched guild list.
   const selectedGuildId = useMemo(() => {
     if (!guilds.length) return "";
-    const raw = String(selectedGuildIdRaw || "").trim();
-    const exists = raw && guilds.some((g) => String(g.id) === raw);
-    return exists ? raw : String(guilds[0]?.id || "");
+    const exists = guilds.some((g) => String(g.id) === String(selectedGuildIdRaw));
+    return exists ? String(selectedGuildIdRaw) : String(guilds[0]?.id || "");
   }, [guilds, selectedGuildIdRaw]);
 
   const selectedGuild = useMemo(
@@ -481,6 +505,11 @@ export default function DashboardPage() {
   const guildAbortRef = useRef(null);
   const perGuildAbortRef = useRef(null);
 
+  // Channels for dropdown pickers
+  const [channels, setChannels] = useState([]);
+  const [channelsLoading, setChannelsLoading] = useState(false);
+  const [channelsWarn, setChannelsWarn] = useState("");
+
   // Modules panel UI state
   const [moduleCategory, setModuleCategory] = useState("moderation");
   const [moduleSearch, setModuleSearch] = useState("");
@@ -494,14 +523,6 @@ export default function DashboardPage() {
     if (woc?.setMood) woc.setMood(mood);
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(""), 2200);
-  }
-
-  // ✅ One function to rule them all: set selection + persist immediately
-  function setSelectedGuildIdSafe(gid) {
-    const id = String(gid ?? "").trim();
-    if (!id || id === "undefined" || id === "null" || id === "[object Object]") return;
-    setSelectedGuildIdRaw(id);
-    safeSet(LS.selectedGuild, id);
   }
 
   useEffect(() => {
@@ -534,13 +555,7 @@ export default function DashboardPage() {
         const data = await fetchJson(GUILDS_ENDPOINT, { cache: "no-store", signal: ac.signal });
         const list = Array.isArray(data.guilds) ? data.guilds : [];
 
-        setGuilds(list);
-
-        // ✅ If localStorage was empty/invalid, auto-select first guild and persist
-        if (list.length && (!selectedGuildIdRaw || selectedGuildIdRaw === "undefined" || selectedGuildIdRaw === "null")) {
-          const first = String(list[0].id);
-          setSelectedGuildIdSafe(first);
-        }
+        if (list.length) setGuilds(list);
 
         const warn = safeErrorMessage(data.warning || data.error || "");
         if (warn) setGuildWarn(warn);
@@ -549,10 +564,9 @@ export default function DashboardPage() {
         setGuildWarn(safeErrorMessage(e?.message || "Failed to load guilds."));
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed]);
 
-  // ✅ When we finally have a real selectedGuildId, persist it (prevents weird reloads)
+  // ✅ When we finally have a real selectedGuildId, persist it (prevents “Missing guildId” on reload)
   useEffect(() => {
     if (!authed) return;
     if (!selectedGuildId) return;
@@ -576,6 +590,7 @@ export default function DashboardPage() {
       try {
         const data = await fetchJson(STATUS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
 
+        // Suppress the one message you keep seeing (it happens when calls fire without a real gid)
         const rawWarn = safeErrorMessage(data?.warning || "");
         const warn = rawWarn === "Missing guildId." ? "" : rawWarn;
 
@@ -610,6 +625,33 @@ export default function DashboardPage() {
     })();
   }, [authed, selectedGuildId]);
 
+  // Channels fetch for pickers
+  useEffect(() => {
+    if (!authed) return;
+    if (!selectedGuildId) return;
+
+    const ac = new AbortController();
+
+    (async () => {
+      try {
+        setChannelsLoading(true);
+        setChannelsWarn("");
+
+        const data = await fetchJson(CHANNELS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
+        const list = Array.isArray(data.channels) ? data.channels : [];
+        setChannels(list);
+      } catch (e) {
+        if (e?.name === "AbortError") return;
+        setChannels([]);
+        setChannelsWarn(safeErrorMessage(e?.message || "Failed to load channels."));
+      } finally {
+        if (!ac.signal.aborted) setChannelsLoading(false);
+      }
+    })();
+
+    return () => ac.abort();
+  }, [authed, selectedGuildId]);
+
   async function saveSettings() {
     if (!selectedGuildId || !settings) return;
     setSettingsLoading(true);
@@ -636,12 +678,12 @@ export default function DashboardPage() {
     mood === "battle"
       ? "Pick a panel. Flip the switches. Let’s duel the chaos."
       : mood === "omen"
-        ? "Warnings in the fog. Not fatal. Just dramatic weather."
-        : mood === "flustered"
-          ? "Too many servers, not enough hands. We cope."
-          : mood === "playful"
-            ? "Twist the dials. Watch the server react."
-            : "This is the control room. Quiet power lives here.";
+      ? "Warnings in the fog. Not fatal. Just dramatic weather."
+      : mood === "flustered"
+      ? "Too many servers, not enough hands. We cope."
+      : mood === "playful"
+      ? "Twist the dials. Watch the server react."
+      : "This is the control room. Quiet power lives here.";
 
   const subnav = [
     ["overview", "Overview"],
@@ -777,7 +819,7 @@ export default function DashboardPage() {
                     value={selectedGuildId}
                     disabled={!guilds.length}
                     onChange={(gid) => {
-                      setSelectedGuildIdSafe(gid);
+                      setSelectedGuildIdRaw(String(gid));
                       setSubtab("overview");
                       woc?.setMood?.("story");
                       setModuleSearch("");
@@ -864,7 +906,7 @@ export default function DashboardPage() {
                       key={g.id}
                       type="button"
                       onClick={() => {
-                        setSelectedGuildIdSafe(g.id);
+                        setSelectedGuildIdRaw(String(g.id));
                         setSubtab("overview");
                         woc?.setMood?.("story");
                         setModuleSearch("");
@@ -1117,6 +1159,17 @@ export default function DashboardPage() {
                     <div className="space-y-4">
                       <SectionTitle title="Logs" subtitle="Choose where WoC writes records." />
 
+                      {channelsWarn ? (
+                        <div className="text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
+                          <div className="font-semibold">Channel list notice</div>
+                          <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{channelsWarn}</div>
+                        </div>
+                      ) : null}
+
+                      {channelsLoading ? (
+                        <div className="text-sm text-[var(--text-muted)]">Loading channels…</div>
+                      ) : null}
+
                       <div className="grid gap-3 sm:grid-cols-2">
                         <label className="woc-card p-4">
                           <div className="font-semibold text-sm">Enable logging</div>
@@ -1155,37 +1208,37 @@ export default function DashboardPage() {
                         </label>
 
                         {[
-                          ["generalChannelId", "General logs channel ID"],
-                          ["modlogChannelId", "Mod logs channel ID"],
-                          ["joinChannelId", "Join logs channel ID"],
-                          ["leaveChannelId", "Leave logs channel ID"],
-                          ["commandChannelId", "Command logs channel ID"],
-                          ["editChannelId", "Edit logs channel ID"],
-                          ["messageChannelId", "Message logs channel ID"],
-                          ["roleChannelId", "Role logs channel ID"],
-                          ["nicknameChannelId", "Nickname logs channel ID"],
+                          ["generalChannelId", "General logs channel"],
+                          ["modlogChannelId", "Mod logs channel"],
+                          ["joinChannelId", "Join logs channel"],
+                          ["leaveChannelId", "Leave logs channel"],
+                          ["commandChannelId", "Command logs channel"],
+                          ["editChannelId", "Edit logs channel"],
+                          ["messageChannelId", "Message logs channel"],
+                          ["roleChannelId", "Role logs channel"],
+                          ["nicknameChannelId", "Nickname logs channel"],
                         ].map(([k, label]) => (
-                          <label key={k} className="woc-card p-4">
+                          <div key={k} className="woc-card p-4">
                             <div className="font-semibold text-sm">{label}</div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">
-                              Paste a channel ID (you’ll add a channel picker later).
-                            </div>
-                            <input
+                            <div className="text-xs text-[var(--text-muted)] mt-1">Pick a channel from the list.</div>
+
+                            <ChannelPicker
+                              channels={channels}
                               value={settings.logs?.[k] || ""}
-                              onChange={(e) => {
-                                setSettings((s) => ({ ...s, logs: { ...s.logs, [k]: e.target.value } }));
+                              disabled={!channels.length}
+                              onChange={(val) => {
+                                setSettings((s) => ({ ...s, logs: { ...s.logs, [k]: val } }));
                                 setDirty(true);
                               }}
-                              className="
-                                mt-3 w-full px-3 py-2 rounded-2xl
-                                border border-[var(--border-subtle)]/70
-                                bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
-                                text-[var(--text-main)]
-                                outline-none
-                              "
-                              placeholder="e.g. 123456789012345678"
+                              placeholder={channels.length ? "Select a channel…" : "No channels found"}
                             />
-                          </label>
+
+                            {settings.logs?.[k] ? (
+                              <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
+                                ID: <span className="font-mono">{settings.logs[k]}</span>
+                              </div>
+                            ) : null}
+                          </div>
                         ))}
                       </div>
                     </div>
@@ -1195,6 +1248,17 @@ export default function DashboardPage() {
                   {subtab === "welcome" ? (
                     <div className="space-y-4">
                       <SectionTitle title="Welcome" subtitle="Welcome channel + message template + autorole." />
+
+                      {channelsWarn ? (
+                        <div className="text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
+                          <div className="font-semibold">Channel list notice</div>
+                          <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{channelsWarn}</div>
+                        </div>
+                      ) : null}
+
+                      {channelsLoading ? (
+                        <div className="text-sm text-[var(--text-muted)]">Loading channels…</div>
+                      ) : null}
 
                       <div className="grid gap-3 sm:grid-cols-2">
                         <label className="woc-card p-4">
@@ -1211,25 +1275,27 @@ export default function DashboardPage() {
                           />
                         </label>
 
-                        <label className="woc-card p-4">
-                          <div className="font-semibold text-sm">Welcome channel ID</div>
+                        <div className="woc-card p-4">
+                          <div className="font-semibold text-sm">Welcome channel</div>
                           <div className="text-xs text-[var(--text-muted)] mt-1">Where the welcome message is posted.</div>
-                          <input
+
+                          <ChannelPicker
+                            channels={channels}
                             value={settings.welcome?.channelId || ""}
-                            onChange={(e) => {
-                              setSettings((s) => ({ ...s, welcome: { ...s.welcome, channelId: e.target.value } }));
+                            disabled={!channels.length}
+                            onChange={(val) => {
+                              setSettings((s) => ({ ...s, welcome: { ...s.welcome, channelId: val } }));
                               setDirty(true);
                             }}
-                            className="
-                              mt-3 w-full px-3 py-2 rounded-2xl
-                              border border-[var(--border-subtle)]/70
-                              bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
-                              text-[var(--text-main)]
-                              outline-none
-                            "
-                            placeholder="e.g. 123456789012345678"
+                            placeholder={channels.length ? "Select a channel…" : "No channels found"}
                           />
-                        </label>
+
+                          {settings.welcome?.channelId ? (
+                            <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
+                              ID: <span className="font-mono">{settings.welcome.channelId}</span>
+                            </div>
+                          ) : null}
+                        </div>
 
                         <label className="woc-card p-4 sm:col-span-2">
                           <div className="font-semibold text-sm">Welcome message</div>
@@ -1249,7 +1315,7 @@ export default function DashboardPage() {
                               text-[var(--text-main)]
                               outline-none
                             "
-                            placeholder="Welcome {user} to {server}!"
+                            placeholder="Welcome {user} to {server}! ✨"
                           />
                         </label>
 
