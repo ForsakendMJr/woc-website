@@ -18,7 +18,6 @@ function safeGet(key, fallback = "") {
   try {
     const v = localStorage.getItem(key);
     if (v == null) return fallback;
-    // Guard against accidental "undefined"/"null" strings
     if (v === "undefined" || v === "null") return fallback;
     return v;
   } catch {
@@ -35,10 +34,7 @@ function safeErrorMessage(input) {
   const msg = String(input || "").trim();
   if (!msg) return "";
   const looksLikeHtml =
-    msg.includes("<!DOCTYPE") ||
-    msg.includes("<html") ||
-    msg.includes("<body") ||
-    msg.includes("<head");
+    msg.includes("<!DOCTYPE") || msg.includes("<html") || msg.includes("<body") || msg.includes("<head");
   if (looksLikeHtml) return "Non-JSON/HTML response received (route missing or misrouted).";
   return msg.length > 260 ? msg.slice(0, 260) + "…" : msg;
 }
@@ -57,9 +53,7 @@ async function fetchJson(url, opts = {}) {
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    const e = new Error(
-      safeErrorMessage(data?.error || data?.warning || `Request failed (${res.status})`)
-    );
+    const e = new Error(safeErrorMessage(data?.error || data?.warning || `Request failed (${res.status})`));
     e.status = res.status;
     e.data = data;
     throw e;
@@ -130,10 +124,7 @@ function IconCircle({ guild, size = 40 }) {
 function GuildPicker({ guilds, value, onChange, disabled }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
-  const selected = useMemo(
-    () => guilds.find((g) => String(g.id) === String(value)) || null,
-    [guilds, value]
-  );
+  const selected = useMemo(() => guilds.find((g) => String(g.id) === String(value)) || null, [guilds, value]);
 
   useEffect(() => {
     function onDoc(e) {
@@ -206,38 +197,49 @@ function GuildPicker({ guilds, value, onChange, disabled }) {
               </button>
             );
           })}
-          {!guilds.length ? (
-            <div className="px-3 py-3 text-sm text-[var(--text-muted)]">No servers found.</div>
-          ) : null}
+          {!guilds.length ? <div className="px-3 py-3 text-sm text-[var(--text-muted)]">No servers found.</div> : null}
         </div>
       ) : null}
     </div>
   );
 }
 
-/** Channel picker (replaces manual ID inputs) */
-function channelLabel(ch) {
-  if (!ch) return "";
-  return `#${ch.name}`;
-}
-function ChannelPicker({ channels, value, onChange, disabled, placeholder = "Select a channel…" }) {
+/** Simple channel picker (name + #hash) */
+function ChannelPicker({
+  channels,
+  value,
+  onChange,
+  disabled,
+  placeholder = "Select a channel",
+  allowNone = true,
+  noneLabel = "None",
+}) {
+  const list = Array.isArray(channels) ? channels : [];
+  const selected = list.find((c) => String(c.id) === String(value)) || null;
+
   return (
     <select
       value={value || ""}
       disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
-      className="
-        mt-3 w-full px-3 py-2 rounded-2xl
-        border border-[var(--border-subtle)]/70
-        bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
-        text-[var(--text-main)]
-        outline-none
-      "
+      className={cx(
+        `
+          mt-3 w-full px-3 py-2 rounded-2xl
+          border border-[var(--border-subtle)]/70
+          bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+          text-[var(--text-main)]
+          outline-none
+        `,
+        disabled ? "opacity-60 cursor-not-allowed" : ""
+      )}
     >
-      <option value="">{placeholder}</option>
-      {channels.map((ch) => (
-        <option key={ch.id} value={ch.id}>
-          {channelLabel(ch)}
+      {allowNone ? <option value="">{noneLabel}</option> : <option value="">{placeholder}</option>}
+      {list.map((c) => (
+        <option key={c.id} value={c.id}>
+          #{c.name}
+          {c.typeLabel ? ` (${c.typeLabel})` : ""}
+          {c.parentName ? ` in ${c.parentName}` : ""}
+          {selected?.id === c.id ? "" : ""}
         </option>
       ))}
     </select>
@@ -246,7 +248,6 @@ function ChannelPicker({ channels, value, onChange, disabled, placeholder = "Sel
 
 /**
  * Modules based on your command folders.
- * Each category has sub-modules that map to “features” you’ll wire later.
  */
 const MODULE_TREE = [
   {
@@ -475,7 +476,7 @@ export default function DashboardPage() {
   const [guildWarn, setGuildWarn] = useState("");
   const [selectedGuildIdRaw, setSelectedGuildIdRaw] = useState(() => safeGet(LS.selectedGuild, ""));
 
-  // ✅ Only treat a guildId as “selected” if it exists in the fetched guild list.
+  // Only treat a guildId as “selected” if it exists in the fetched guild list.
   const selectedGuildId = useMemo(() => {
     if (!guilds.length) return "";
     const exists = guilds.some((g) => String(g.id) === String(selectedGuildIdRaw));
@@ -501,14 +502,15 @@ export default function DashboardPage() {
   const [settings, setSettings] = useState(null);
   const [dirty, setDirty] = useState(false);
 
+  // Channels for pickers
+  const [channelsLoading, setChannelsLoading] = useState(false);
+  const [channelsWarn, setChannelsWarn] = useState("");
+  const [channels, setChannels] = useState([]);
+
   const guildFetchOnceRef = useRef(false);
   const guildAbortRef = useRef(null);
   const perGuildAbortRef = useRef(null);
-
-  // Channels for dropdown pickers
-  const [channels, setChannels] = useState([]);
-  const [channelsLoading, setChannelsLoading] = useState(false);
-  const [channelsWarn, setChannelsWarn] = useState("");
+  const channelsAbortRef = useRef(null);
 
   // Modules panel UI state
   const [moduleCategory, setModuleCategory] = useState("moderation");
@@ -530,6 +532,7 @@ export default function DashboardPage() {
       if (toastTimer.current) clearTimeout(toastTimer.current);
       if (guildAbortRef.current) guildAbortRef.current.abort();
       if (perGuildAbortRef.current) perGuildAbortRef.current.abort();
+      if (channelsAbortRef.current) channelsAbortRef.current.abort();
     };
   }, []);
 
@@ -554,7 +557,6 @@ export default function DashboardPage() {
         setGuildWarn("");
         const data = await fetchJson(GUILDS_ENDPOINT, { cache: "no-store", signal: ac.signal });
         const list = Array.isArray(data.guilds) ? data.guilds : [];
-
         if (list.length) setGuilds(list);
 
         const warn = safeErrorMessage(data.warning || data.error || "");
@@ -566,14 +568,14 @@ export default function DashboardPage() {
     })();
   }, [authed]);
 
-  // ✅ When we finally have a real selectedGuildId, persist it (prevents “Missing guildId” on reload)
+  // Persist selected guild once we have a valid one
   useEffect(() => {
     if (!authed) return;
     if (!selectedGuildId) return;
     safeSet(LS.selectedGuild, selectedGuildId);
   }, [authed, selectedGuildId]);
 
-  // On guild change: install gate + settings (ONLY when selectedGuildId is valid)
+  // On guild change: install gate + settings
   useEffect(() => {
     if (!authed) return;
     if (!selectedGuildId) return;
@@ -589,8 +591,6 @@ export default function DashboardPage() {
     (async () => {
       try {
         const data = await fetchJson(STATUS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
-
-        // Suppress the one message you keep seeing (it happens when calls fire without a real gid)
         const rawWarn = safeErrorMessage(data?.warning || "");
         const warn = rawWarn === "Missing guildId." ? "" : rawWarn;
 
@@ -625,25 +625,33 @@ export default function DashboardPage() {
     })();
   }, [authed, selectedGuildId]);
 
-  // Channels fetch for pickers
+  // On guild change: fetch channels for pickers (guarded so no “Missing guildId”)
   useEffect(() => {
     if (!authed) return;
     if (!selectedGuildId) return;
 
+    if (channelsAbortRef.current) channelsAbortRef.current.abort();
     const ac = new AbortController();
+    channelsAbortRef.current = ac;
+
+    setChannelsLoading(true);
+    setChannels([]);
+    setChannelsWarn("");
 
     (async () => {
       try {
-        setChannelsLoading(true);
-        setChannelsWarn("");
-
         const data = await fetchJson(CHANNELS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
         const list = Array.isArray(data.channels) ? data.channels : [];
         setChannels(list);
+
+        const rawWarn = safeErrorMessage(data.warning || "");
+        const warn = rawWarn === "Missing guildId." ? "" : rawWarn;
+        setChannelsWarn(warn || "");
       } catch (e) {
         if (e?.name === "AbortError") return;
-        setChannels([]);
-        setChannelsWarn(safeErrorMessage(e?.message || "Failed to load channels."));
+        const msg = safeErrorMessage(e?.message || "Failed to load channels.");
+        // Hide the one you were seeing, just in case any edge case slips through
+        setChannelsWarn(msg === "Missing guildId." ? "" : msg);
       } finally {
         if (!ac.signal.aborted) setChannelsLoading(false);
       }
@@ -730,7 +738,17 @@ export default function DashboardPage() {
     setDirty(true);
   }
 
-  const showNoticePill = !!(guildWarn || install.warning);
+  const showNoticePill = !!(guildWarn || install.warning || channelsWarn);
+
+  // Filter channels (fallback: if your API already filters, this still works)
+  const textChannels = useMemo(() => {
+    const list = Array.isArray(channels) ? channels : [];
+    return list.filter((c) => {
+      const t = String(c?.type || "").toLowerCase();
+      const label = String(c?.typeLabel || "").toLowerCase();
+      return t.includes("text") || label.includes("text") || t.includes("announcement") || label.includes("announce");
+    });
+  }, [channels]);
 
   return (
     <div className="max-w-7xl mx-auto px-6 lg:px-10 py-12">
@@ -799,6 +817,7 @@ export default function DashboardPage() {
                   right={
                     <div className="flex items-center gap-2">
                       {install.loading ? <Pill>Checking gate…</Pill> : null}
+                      {channelsLoading ? <Pill>Loading channels…</Pill> : null}
                       {install.installed === true ? <Pill tone="ok">Installed ✅</Pill> : null}
                       {install.installed === false ? <Pill tone="warn">Not installed 🔒</Pill> : null}
                       {showNoticePill ? <Pill tone="warn">Notice ⚠️</Pill> : null}
@@ -831,6 +850,13 @@ export default function DashboardPage() {
                   <div className="mt-4 text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
                     <div className="font-semibold">Gate notice</div>
                     <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{install.warning}</div>
+                  </div>
+                ) : null}
+
+                {channelsWarn && selectedGuildId ? (
+                  <div className="mt-4 text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
+                    <div className="font-semibold">Channel list notice</div>
+                    <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{channelsWarn}</div>
                   </div>
                 ) : null}
 
@@ -873,10 +899,7 @@ export default function DashboardPage() {
                 <SectionTitle title="Control seal" subtitle="Changes persist per server." />
                 <div className="mt-4 flex flex-col gap-2">
                   <button
-                    className={cx(
-                      "woc-btn-primary",
-                      !gateInstalled || !dirty || settingsLoading ? "opacity-60 cursor-not-allowed" : ""
-                    )}
+                    className={cx("woc-btn-primary", !gateInstalled || !dirty || settingsLoading ? "opacity-60 cursor-not-allowed" : "")}
                     disabled={!gateInstalled || !dirty || settingsLoading}
                     onClick={saveSettings}
                     title={!gateInstalled ? "Invite WoC to unlock saving." : !dirty ? "No changes yet." : "Save changes"}
@@ -885,11 +908,7 @@ export default function DashboardPage() {
                   </button>
 
                   <div className="text-[0.72rem] text-[var(--text-muted)]">
-                    {gateInstalled
-                      ? dirty
-                        ? "WoC is watching. Commit the ritual."
-                        : "All quiet. No edits pending."
-                      : "Gate closed. Invite WoC to enable editing."}
+                    {gateInstalled ? (dirty ? "WoC is watching. Commit the ritual." : "All quiet. No edits pending.") : "Gate closed. Invite WoC to enable editing."}
                   </div>
                 </div>
               </div>
@@ -931,9 +950,7 @@ export default function DashboardPage() {
               </div>
 
               {guilds.length > 12 ? (
-                <div className="mt-3 text-[0.72rem] text-[var(--text-muted)]">
-                  Showing 12. Use the selector for the full list.
-                </div>
+                <div className="mt-3 text-[0.72rem] text-[var(--text-muted)]">Showing 12. Use the selector for the full list.</div>
               ) : null}
             </div>
 
@@ -1147,8 +1164,8 @@ export default function DashboardPage() {
                         </div>
 
                         <div className="mt-4 text-[0.72rem] text-[var(--text-muted)]">
-                          This panel controls feature flags. Next step is wiring your bot to read{" "}
-                          <b>settings.modules</b> and block/allow commands accordingly.
+                          This panel controls feature flags. Next step is wiring your bot to read <b>settings.modules</b> and
+                          block/allow commands accordingly.
                         </div>
                       </div>
                     </div>
@@ -1158,17 +1175,6 @@ export default function DashboardPage() {
                   {subtab === "logs" ? (
                     <div className="space-y-4">
                       <SectionTitle title="Logs" subtitle="Choose where WoC writes records." />
-
-                      {channelsWarn ? (
-                        <div className="text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
-                          <div className="font-semibold">Channel list notice</div>
-                          <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{channelsWarn}</div>
-                        </div>
-                      ) : null}
-
-                      {channelsLoading ? (
-                        <div className="text-sm text-[var(--text-muted)]">Loading channels…</div>
-                      ) : null}
 
                       <div className="grid gap-3 sm:grid-cols-2">
                         <label className="woc-card p-4">
@@ -1220,22 +1226,24 @@ export default function DashboardPage() {
                         ].map(([k, label]) => (
                           <div key={k} className="woc-card p-4">
                             <div className="font-semibold text-sm">{label}</div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">Pick a channel from the list.</div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">
+                              Pick a channel. (If empty: logs for that category are effectively “unrouted”.)
+                            </div>
 
                             <ChannelPicker
-                              channels={channels}
+                              channels={textChannels}
                               value={settings.logs?.[k] || ""}
-                              disabled={!channels.length}
+                              disabled={!gateInstalled || channelsLoading}
                               onChange={(val) => {
                                 setSettings((s) => ({ ...s, logs: { ...s.logs, [k]: val } }));
                                 setDirty(true);
                               }}
-                              placeholder={channels.length ? "Select a channel…" : "No channels found"}
+                              noneLabel="None"
                             />
 
-                            {settings.logs?.[k] ? (
-                              <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
-                                ID: <span className="font-mono">{settings.logs[k]}</span>
+                            {!gateInstalled ? (
+                              <div className="mt-2 text-[0.72rem] text-amber-200/90">
+                                Gate closed. Invite WoC to enable editing.
                               </div>
                             ) : null}
                           </div>
@@ -1248,17 +1256,6 @@ export default function DashboardPage() {
                   {subtab === "welcome" ? (
                     <div className="space-y-4">
                       <SectionTitle title="Welcome" subtitle="Welcome channel + message template + autorole." />
-
-                      {channelsWarn ? (
-                        <div className="text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
-                          <div className="font-semibold">Channel list notice</div>
-                          <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{channelsWarn}</div>
-                        </div>
-                      ) : null}
-
-                      {channelsLoading ? (
-                        <div className="text-sm text-[var(--text-muted)]">Loading channels…</div>
-                      ) : null}
 
                       <div className="grid gap-3 sm:grid-cols-2">
                         <label className="woc-card p-4">
@@ -1280,19 +1277,21 @@ export default function DashboardPage() {
                           <div className="text-xs text-[var(--text-muted)] mt-1">Where the welcome message is posted.</div>
 
                           <ChannelPicker
-                            channels={channels}
+                            channels={textChannels}
                             value={settings.welcome?.channelId || ""}
-                            disabled={!channels.length}
+                            disabled={!gateInstalled || channelsLoading}
                             onChange={(val) => {
                               setSettings((s) => ({ ...s, welcome: { ...s.welcome, channelId: val } }));
                               setDirty(true);
                             }}
-                            placeholder={channels.length ? "Select a channel…" : "No channels found"}
+                            noneLabel="Select a channel"
+                            allowNone={false}
+                            placeholder="Select a channel"
                           />
 
-                          {settings.welcome?.channelId ? (
-                            <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
-                              ID: <span className="font-mono">{settings.welcome.channelId}</span>
+                          {!gateInstalled ? (
+                            <div className="mt-2 text-[0.72rem] text-amber-200/90">
+                              Gate closed. Invite WoC to enable editing.
                             </div>
                           ) : null}
                         </div>
@@ -1315,7 +1314,7 @@ export default function DashboardPage() {
                               text-[var(--text-main)]
                               outline-none
                             "
-                            placeholder="Welcome {user} to {server}! ✨"
+                            placeholder="Welcome {user} to {server}!"
                           />
                         </label>
 
@@ -1472,10 +1471,7 @@ export default function DashboardPage() {
                   {/* ACTION LOG */}
                   {subtab === "actionlog" ? (
                     <div className="space-y-3">
-                      <SectionTitle
-                        title="Action log"
-                        subtitle="Soon: admin actions, toggles changed, mod events (from bot/webhook)."
-                      />
+                      <SectionTitle title="Action log" subtitle="Soon: admin actions, toggles changed, mod events (from bot/webhook)." />
                       <div className="woc-card p-4 text-sm text-[var(--text-muted)]">
                         No entries yet. The chronicle is empty… suspiciously peaceful.
                       </div>
