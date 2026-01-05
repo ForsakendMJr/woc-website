@@ -1,9 +1,12 @@
 // app/api/guilds/[guildId]/settings/route.js
 import { NextResponse } from "next/server";
-import { getToken } from "next-auth/jwt";
+import dbConnect from "@/lib/mongodb";
+import GuildSettings from "@/models/GuildSettings";
 
 export const dynamic = "force-dynamic";
 const DISCORD_API = "https://discord.com/api/v10";
+
+/* -------------------- helpers -------------------- */
 
 function getBotToken() {
   const t =
@@ -22,67 +25,145 @@ function getBotToken() {
   return { token: t, source };
 }
 
-function safeText(input, max = 220) {
-  const s = String(input || "").trim();
-  return s.length > max ? s.slice(0, max) + "…" : s;
+async function botInGuildOrFail(guildId) {
+  const { token: botToken, source: botTokenSource } = getBotToken();
+
+  if (!botToken) {
+    return {
+      ok: false,
+      installed: null,
+      bot_token_source: botTokenSource,
+      error: "Missing bot token. Set DISCORD_BOT_TOKEN (or DISCORD_TOKEN).",
+    };
+  }
+
+  const res = await fetch(`${DISCORD_API}/guilds/${guildId}`, {
+    headers: { Authorization: `Bot ${botToken}` },
+    cache: "no-store",
+  });
+
+  if (res.status === 403 || res.status === 404) {
+    return { ok: true, installed: false, guildId, bot_token_source: botTokenSource };
+  }
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    return {
+      ok: false,
+      installed: null,
+      bot_token_source: botTokenSource,
+      error: `Bot guild check failed (${res.status}). ${txt}`,
+    };
+  }
+
+  return { ok: true, installed: true, guildId, bot_token_source: botTokenSource };
 }
 
+function defaultSettings(guildId) {
+  return {
+    guildId,
+    prefix: "!",
+    moderation: { enabled: true, automod: false, antiLink: false, antiSpam: true },
+    logs: {
+      enabled: true,
+      generalChannelId: "",
+      modlogChannelId: "",
+      joinChannelId: "",
+      leaveChannelId: "",
+      messageChannelId: "",
+      roleChannelId: "",
+      nicknameChannelId: "",
+      commandChannelId: "",
+      editChannelId: "",
+    },
+    welcome: {
+      enabled: false,
+      channelId: "",
+      message: "Welcome {user} to **{server}**! ✨",
+      autoRoleId: "",
+    },
+    modules: {},
+    personality: { mood: "story", sass: 35, narration: true },
+    tickets: {},
+  };
+}
+
+/* -------------------- GET -------------------- */
+
 export async function GET(req, { params }) {
-  try {
-    await getToken({ req, secret: process.env.NEXTAUTH_SECRET }); // keep auth hook if you want it
+  const guildId = params?.guildId;
+  if (!guildId) {
+    return NextResponse.json({ ok: false, error: "Missing guildId." }, { status: 400 });
+  }
 
-    const guildId = params?.guildId;
-    if (!guildId) {
-      return NextResponse.json({ ok: false, error: "Missing guildId." }, { status: 400 });
-    }
+  const gate = await botInGuildOrFail(guildId);
+  if (!gate.ok) return NextResponse.json(gate, { status: 200 });
 
-    const { token: botToken, source: botTokenSource } = getBotToken();
-    if (!botToken) {
-      return NextResponse.json(
-        { ok: false, bot_token_source: botTokenSource, error: "Missing bot token. Set DISCORD_BOT_TOKEN (or DISCORD_TOKEN)." },
-        { status: 500 }
-      );
-    }
+  await dbConnect();
 
-    // ✅ Same reliable check: bot guild list
-    const botGuildsRes = await fetch(`${DISCORD_API}/users/@me/guilds`, {
-      headers: { Authorization: `Bot ${botToken}` },
-      cache: "no-store",
-    });
-
-    if (botGuildsRes.status === 429) {
-      const body = await botGuildsRes.json().catch(() => ({}));
-      const retryAfter = Number(body?.retry_after || 1);
-      return NextResponse.json(
-        {
-          ok: true,
-          installed: null,
-          bot_token_source: botTokenSource,
-          warning: `Discord rate-limited the bot guild list. Retry in ~${Math.ceil(retryAfter)}s.`,
-          retry_after: retryAfter,
-        },
-        { status: 200, headers: { "Retry-After": String(Math.ceil(retryAfter)) } }
-      );
-    }
-
-    if (!botGuildsRes.ok) {
-      const txt = await botGuildsRes.text().catch(() => "");
-      return NextResponse.json(
-        { ok: false, bot_token_source: botTokenSource, error: safeText(`Bot guild list failed (${botGuildsRes.status}). ${txt}`) },
-        { status: 500 }
-      );
-    }
-
-    const botGuilds = await botGuildsRes.json().catch(() => []);
-    const installed =
-      Array.isArray(botGuilds) && botGuilds.some((g) => String(g?.id) === String(guildId));
-
-    // Keep your DB logic later. For now return defaults.
+  if (gate.installed === false) {
     return NextResponse.json(
-      { ok: true, installed, guildId, bot_token_source: botTokenSource, settings: {} },
+      { ...gate, settings: defaultSettings(guildId) },
       { status: 200 }
     );
-  } catch (err) {
-    return NextResponse.json({ ok: false, error: String(err?.message || err) }, { status: 500 });
   }
+
+  let doc = await GuildSettings.findOne({ guildId }).lean();
+
+  if (!doc) {
+    doc = defaultSettings(guildId);
+  }
+
+  return NextResponse.json(
+    {
+      ...gate,
+      settings: doc,
+    },
+    { status: 200 }
+  );
+}
+
+/* -------------------- PUT -------------------- */
+
+export async function PUT(req, { params }) {
+  const guildId = params?.guildId;
+  if (!guildId) {
+    return NextResponse.json({ ok: false, error: "Missing guildId." }, { status: 400 });
+  }
+
+  const gate = await botInGuildOrFail(guildId);
+  if (!gate.ok) return NextResponse.json(gate, { status: 200 });
+
+  if (gate.installed === false) {
+    return NextResponse.json(
+      { ...gate, error: "Bot not installed in this server. Invite WoC to enable saving." },
+      { status: 200 }
+    );
+  }
+
+  const body = await req.json().catch(() => null);
+  if (!body || typeof body !== "object") {
+    return NextResponse.json({ ok: false, error: "Invalid JSON body." }, { status: 400 });
+  }
+
+  await dbConnect();
+
+  const updated = await GuildSettings.findOneAndUpdate(
+    { guildId },
+    {
+      $set: {
+        guildId,
+        ...body, // ✅ flatten directly into schema
+      },
+    },
+    { upsert: true, new: true }
+  ).lean();
+
+  return NextResponse.json(
+    {
+      ...gate,
+      settings: updated,
+    },
+    { status: 200 }
+  );
 }
