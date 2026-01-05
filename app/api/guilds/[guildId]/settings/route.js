@@ -1,7 +1,7 @@
 // app/api/guilds/[guildId]/settings/route.js
 import { NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
-import GuildSettings from "@/models/GuildSettings";
+import GuildSettings from "@/app/models/GuildSettings";
 
 export const dynamic = "force-dynamic";
 const DISCORD_API = "https://discord.com/api/v10";
