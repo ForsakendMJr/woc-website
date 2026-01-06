@@ -1,56 +1,98 @@
-// app/api/guilds/[guildId]/channels/route.js
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
-
 const DISCORD_API = "https://discord.com/api/v10";
 
 function getBotToken() {
-  return process.env.DISCORD_BOT_TOKEN || process.env.DISCORD_TOKEN || null;
+  const token =
+    process.env.DISCORD_BOT_TOKEN ||
+    process.env.DISCORD_TOKEN ||
+    process.env.DICSORD_BOT_TOKEN;
+
+  const source = process.env.DISCORD_BOT_TOKEN
+    ? "DISCORD_BOT_TOKEN"
+    : process.env.DISCORD_TOKEN
+      ? "DISCORD_TOKEN"
+      : process.env.DICSORD_BOT_TOKEN
+        ? "DICSORD_BOT_TOKEN"
+        : null;
+
+  return { token, source };
 }
 
-export async function GET(req, { params }) {
-  try {
-    const guildId = params?.guildId;
-    if (!guildId) {
-      return NextResponse.json({ ok: false, error: "Missing guildId." }, { status: 400 });
-    }
+function isSnowflake(x) {
+  return typeof x === "string" && /^\d{16,20}$/.test(x);
+}
 
-    const botToken = getBotToken();
-    if (!botToken) {
-      return NextResponse.json({ ok: false, error: "Missing bot token." }, { status: 500 });
-    }
+function typeLabel(t) {
+  // Discord API v10 channel types (common ones)
+  const map = {
+    0: "Text",
+    2: "Voice",
+    4: "Category",
+    5: "Announcement",
+    13: "Stage",
+    15: "Forum",
+  };
+  return map[t] || `Type ${t}`;
+}
 
-    const res = await fetch(`${DISCORD_API}/guilds/${guildId}/channels`, {
-      headers: { Authorization: `Bot ${botToken}` },
-      cache: "no-store",
-    });
+export async function GET(_req, { params }) {
+  const guildId = params?.guildId ? String(params.guildId) : "";
+  if (!isSnowflake(guildId)) {
+    return NextResponse.json({ ok: false, error: "Missing guildId." }, { status: 400 });
+  }
 
-    const data = await res.json().catch(() => []);
-    if (!res.ok) {
-      return NextResponse.json(
-        { ok: false, error: data?.message || `Failed to fetch channels (${res.status}).` },
-        { status: 200 }
-      );
-    }
-
-    // Keep it simple: Text channels (0) + Announcement channels (5)
-    const allowed = new Set([0, 5]);
-
-    const channels = (Array.isArray(data) ? data : [])
-      .filter((c) => allowed.has(c.type))
-      .map((c) => ({
-        id: String(c.id),
-        name: c.name,
-        type: c.type,
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-
-    return NextResponse.json({ ok: true, channels }, { status: 200 });
-  } catch (err) {
+  const { token: botToken, source } = getBotToken();
+  if (!botToken) {
     return NextResponse.json(
-      { ok: false, error: String(err?.message || err) },
+      {
+        ok: false,
+        bot_token_source: source,
+        error: "Missing bot token. Set DISCORD_BOT_TOKEN (or DISCORD_TOKEN).",
+      },
       { status: 200 }
     );
   }
+
+  const res = await fetch(`${DISCORD_API}/guilds/${guildId}/channels`, {
+    headers: { Authorization: `Bot ${botToken}` },
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    return NextResponse.json(
+      { ok: false, error: `Channel fetch failed (${res.status}). ${txt}`.slice(0, 500) },
+      { status: 200 }
+    );
+  }
+
+  const raw = await res.json().catch(() => []);
+  const list = Array.isArray(raw) ? raw : [];
+
+  const categories = new Map();
+  for (const c of list) {
+    if (c?.type === 4) categories.set(String(c.id), c.name || "");
+  }
+
+  const channels = list
+    .filter((c) => c && c.id && c.name && c.type !== 4)
+    .map((c) => ({
+      id: String(c.id),
+      name: c.name,
+      type: c.type,
+      typeLabel: typeLabel(c.type),
+      parentId: c.parent_id ? String(c.parent_id) : "",
+      parentName: c.parent_id ? categories.get(String(c.parent_id)) || "" : "",
+    }))
+    .sort((a, b) => {
+      // group by category name then channel name
+      const pa = (a.parentName || "").toLowerCase();
+      const pb = (b.parentName || "").toLowerCase();
+      if (pa !== pb) return pa.localeCompare(pb);
+      return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+    });
+
+  return NextResponse.json({ ok: true, channels }, { status: 200 });
 }
