@@ -1,45 +1,203 @@
+// app/api/guilds/[guildId]/status/route.js
 import { NextResponse } from "next/server";
+import { getToken } from "next-auth/jwt";
 
-export async function GET(req, { params }) {
-  const { guildId } = params;
+export const dynamic = "force-dynamic";
 
-  const token = process.env.DISCORD_BOT_TOKEN;
-  if (!token) {
-    return NextResponse.json(
-      { ok: false, error: "DISCORD_BOT_TOKEN missing" },
-      { status: 500 }
+const DISCORD_API = "https://discord.com/api/v10";
+const PERM_ADMIN = 0x8;
+
+const ME_GUILDS_TTL_MS = 30 * 1000;
+const meGuildsCache =
+  globalThis.__wocMeGuildsCache || (globalThis.__wocMeGuildsCache = new Map());
+
+function getBotToken() {
+  const t =
+    process.env.DISCORD_BOT_TOKEN ||
+    process.env.DISCORD_TOKEN ||
+    process.env.DICSORD_BOT_TOKEN;
+
+  const source = process.env.DISCORD_BOT_TOKEN
+    ? "DISCORD_BOT_TOKEN"
+    : process.env.DISCORD_TOKEN
+      ? "DISCORD_TOKEN"
+      : process.env.DICSORD_BOT_TOKEN
+        ? "DICSORD_BOT_TOKEN"
+        : null;
+
+  return { token: t, source };
+}
+
+function safeText(input, max = 220) {
+  const s = String(input || "").trim();
+  return s.length > max ? s.slice(0, max) + "…" : s;
+}
+
+// ✅ reject invalid guildIds early ("" / "undefined" / "null" / non-snowflake)
+function isValidSnowflake(id) {
+  const s = String(id || "").trim();
+  if (!s) return false;
+  if (s === "undefined" || s === "null") return false;
+  return /^[0-9]{17,20}$/.test(s);
+}
+
+function isManageable(g) {
+  if (!g) return false;
+  const perms = Number(g.permissions || 0);
+  return !!g.owner || (perms & PERM_ADMIN) === PERM_ADMIN;
+}
+
+async function getMeGuilds(token) {
+  const userKey = token?.sub || token?.id || "me";
+  const cacheKey = `meGuilds:${userKey}`;
+  const now = Date.now();
+
+  const hit = meGuildsCache.get(cacheKey);
+  if (hit && hit.exp > now) return { guilds: hit.guilds, warning: hit.warning || "" };
+
+  const res = await fetch(`${DISCORD_API}/users/@me/guilds`, {
+    headers: { Authorization: `Bearer ${token.accessToken}` },
+    cache: "no-store",
+  });
+
+  if (res.status === 429) {
+    const body = await res.json().catch(() => ({}));
+    const retryAfter = Number(body?.retry_after || 1);
+
+    if (hit?.guilds?.length) {
+      return {
+        guilds: hit.guilds,
+        warning: `Discord rate-limited your guild list. Using cached list (~${Math.ceil(retryAfter)}s).`,
+      };
+    }
+
+    const err = new Error(
+      safeText(`Discord rate-limited your guild list. Try again in ~${Math.ceil(retryAfter)}s.`)
     );
+    err.status = 503;
+    err.retry_after = retryAfter;
+    throw err;
   }
 
-  try {
-    const res = await fetch(
-      `https://discord.com/api/v10/users/@me/guilds`,
-      {
-        headers: {
-          Authorization: `Bot ${token}`,
-        },
-      }
-    );
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    const err = new Error(safeText(`Failed to read your guilds: ${res.status} ${txt}`));
+    err.status = 503;
+    throw err;
+  }
 
-    if (!res.ok) {
+  const guilds = await res.json().catch(() => []);
+  meGuildsCache.set(cacheKey, { exp: now + ME_GUILDS_TTL_MS, guilds, warning: "" });
+  return { guilds, warning: "" };
+}
+
+export async function GET(req, { params }) {
+  try {
+    const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
+
+    if (!token?.accessToken) {
       return NextResponse.json(
-        { ok: false, error: "Discord API error" },
-        { status: 500 }
+        { ok: true, installed: null, warning: "Sign in to check the server gate." },
+        { status: 200 }
       );
     }
 
-    const guilds = await res.json();
-    const botInGuild = guilds.some(g => g.id === guildId);
+    const guildIdRaw = params?.guildId;
+    // ✅ do NOT call Discord with junk ids
+    if (!isValidSnowflake(guildIdRaw)) {
+      return NextResponse.json(
+        { ok: true, installed: null, warning: "Missing/invalid guildId." },
+        { status: 200 }
+      );
+    }
 
-    return NextResponse.json({
-      ok: true,
-      guildId,
-      botInGuild,
+    const guildId = String(guildIdRaw);
+
+    const { guilds: myGuilds, warning: permWarning } = await getMeGuilds(token);
+    const meGuild = (Array.isArray(myGuilds) ? myGuilds : []).find(
+      (g) => String(g?.id) === guildId
+    );
+
+    if (!meGuild || !isManageable(meGuild)) {
+      return NextResponse.json(
+        {
+          ok: true,
+          installed: null,
+          warning: "You don’t have Admin in that server (or it’s not in your list).",
+        },
+        { status: 200 }
+      );
+    }
+
+    const { token: botToken, source: botTokenSource } = getBotToken();
+    if (!botToken) {
+      return NextResponse.json(
+        {
+          ok: true,
+          installed: null,
+          bot_token_source: botTokenSource,
+          warning: "Server bot token missing on server. Set DISCORD_BOT_TOKEN (or DISCORD_TOKEN).",
+        },
+        { status: 200 }
+      );
+    }
+
+    const botGuildRes = await fetch(`${DISCORD_API}/guilds/${guildId}`, {
+      headers: { Authorization: `Bot ${botToken}` },
+      cache: "no-store",
     });
+
+    if (botGuildRes.status === 429) {
+      const body = await botGuildRes.json().catch(() => ({}));
+      const retryAfter = Number(body?.retry_after || 1);
+
+      return NextResponse.json(
+        {
+          ok: true,
+          installed: null,
+          bot_token_source: botTokenSource,
+          warning:
+            `Discord rate-limited the bot check. Try again in ~${Math.ceil(retryAfter)}s.` +
+            (permWarning ? ` (${permWarning})` : ""),
+          retry_after: retryAfter,
+        },
+        { status: 200, headers: { "Retry-After": String(Math.ceil(retryAfter)) } }
+      );
+    }
+
+    if (botGuildRes.status === 403 || botGuildRes.status === 404) {
+      return NextResponse.json(
+        { ok: true, installed: false, guildId, bot_token_source: botTokenSource, warning: permWarning || "" },
+        { status: 200 }
+      );
+    }
+
+    if (!botGuildRes.ok) {
+      const txt = await botGuildRes.text().catch(() => "");
+      return NextResponse.json(
+        {
+          ok: true,
+          installed: null,
+          bot_token_source: botTokenSource,
+          warning: safeText(`Bot check failed: ${botGuildRes.status} ${txt}`),
+        },
+        { status: 200 }
+      );
+    }
+
+    return NextResponse.json(
+      { ok: true, installed: true, guildId, bot_token_source: botTokenSource, warning: permWarning || "" },
+      { status: 200 }
+    );
   } catch (err) {
     return NextResponse.json(
-      { ok: false, error: err.message },
-      { status: 500 }
+      {
+        ok: true,
+        installed: null,
+        warning: safeText(err?.message || "Gate check unavailable right now."),
+        retry_after: err?.retry_after ?? null,
+      },
+      { status: 200 }
     );
   }
 }

@@ -30,11 +30,22 @@ function safeSet(key, val) {
   } catch {}
 }
 
+// ✅ Discord snowflake guard (prevents "undefined" / junk from ever being used)
+function isSnowflake(id) {
+  const s = String(id || "").trim();
+  if (!s) return false;
+  if (s === "undefined" || s === "null") return false;
+  return /^[0-9]{17,20}$/.test(s);
+}
+
 function safeErrorMessage(input) {
   const msg = String(input || "").trim();
   if (!msg) return "";
   const looksLikeHtml =
-    msg.includes("<!DOCTYPE") || msg.includes("<html") || msg.includes("<body") || msg.includes("<head");
+    msg.includes("<!DOCTYPE") ||
+    msg.includes("<html") ||
+    msg.includes("<body") ||
+    msg.includes("<head");
   if (looksLikeHtml) return "Non-JSON/HTML response received (route missing or misrouted).";
   return msg.length > 260 ? msg.slice(0, 260) + "…" : msg;
 }
@@ -47,13 +58,16 @@ async function fetchJson(url, opts = {}) {
     const txt = await res.text().catch(() => "");
     const e = new Error(safeErrorMessage(txt || `Non-JSON response (${res.status})`));
     e.status = res.status;
+    e.body = txt;
     throw e;
   }
 
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    const e = new Error(safeErrorMessage(data?.error || data?.warning || `Request failed (${res.status})`));
+    const e = new Error(
+      safeErrorMessage(data?.error || data?.warning || `Request failed (${res.status})`)
+    );
     e.status = res.status;
     e.data = data;
     throw e;
@@ -124,7 +138,10 @@ function IconCircle({ guild, size = 40 }) {
 function GuildPicker({ guilds, value, onChange, disabled }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
-  const selected = useMemo(() => guilds.find((g) => String(g.id) === String(value)) || null, [guilds, value]);
+  const selected = useMemo(
+    () => guilds.find((g) => String(g.id) === String(value)) || null,
+    [guilds, value]
+  );
 
   useEffect(() => {
     function onDoc(e) {
@@ -215,7 +232,6 @@ function ChannelPicker({
   noneLabel = "None",
 }) {
   const list = Array.isArray(channels) ? channels : [];
-  const selected = list.find((c) => String(c.id) === String(value)) || null;
 
   return (
     <select
@@ -233,13 +249,16 @@ function ChannelPicker({
         disabled ? "opacity-60 cursor-not-allowed" : ""
       )}
     >
-      {allowNone ? <option value="">{noneLabel}</option> : <option value="">{placeholder}</option>}
+      {allowNone ? (
+        <option value="">{noneLabel}</option>
+      ) : (
+        <option value="">{placeholder}</option>
+      )}
       {list.map((c) => (
         <option key={c.id} value={c.id}>
           #{c.name}
           {c.typeLabel ? ` (${c.typeLabel})` : ""}
           {c.parentName ? ` in ${c.parentName}` : ""}
-          {selected?.id === c.id ? "" : ""}
         </option>
       ))}
     </select>
@@ -474,13 +493,21 @@ export default function DashboardPage() {
 
   const [guilds, setGuilds] = useState([]);
   const [guildWarn, setGuildWarn] = useState("");
-  const [selectedGuildIdRaw, setSelectedGuildIdRaw] = useState(() => safeGet(LS.selectedGuild, ""));
 
-  // Only treat a guildId as “selected” if it exists in the fetched guild list.
+  // Store raw localStorage value, but never let it cause API calls until validated.
+  const [selectedGuildIdRaw, setSelectedGuildIdRaw] = useState(() =>
+    safeGet(LS.selectedGuild, "")
+  );
+
+  // ✅ Chosen guild must be a real snowflake AND exist in list.
   const selectedGuildId = useMemo(() => {
+    const raw = String(selectedGuildIdRaw || "").trim();
     if (!guilds.length) return "";
-    const exists = guilds.some((g) => String(g.id) === String(selectedGuildIdRaw));
-    return exists ? String(selectedGuildIdRaw) : String(guilds[0]?.id || "");
+    if (isSnowflake(raw) && guilds.some((g) => String(g.id) === raw)) return raw;
+
+    // fallback: first guild id (if valid)
+    const first = String(guilds[0]?.id || "");
+    return isSnowflake(first) ? first : "";
   }, [guilds, selectedGuildIdRaw]);
 
   const selectedGuild = useMemo(
@@ -555,30 +582,46 @@ export default function DashboardPage() {
     (async () => {
       try {
         setGuildWarn("");
-        const data = await fetchJson(GUILDS_ENDPOINT, { cache: "no-store", signal: ac.signal });
+        const data = await fetchJson(GUILDS_ENDPOINT, {
+          cache: "no-store",
+          signal: ac.signal,
+        });
+
         const list = Array.isArray(data.guilds) ? data.guilds : [];
-        if (list.length) setGuilds(list);
+        setGuilds(list);
 
         const warn = safeErrorMessage(data.warning || data.error || "");
         if (warn) setGuildWarn(warn);
+
+        // ✅ Once guilds arrive, force raw selection to a real id (prevents any chance of "undefined" later)
+        const raw = String(selectedGuildIdRaw || "").trim();
+        const first = String(list[0]?.id || "");
+        const validRaw = isSnowflake(raw) && list.some((g) => String(g.id) === raw);
+        if (!validRaw && isSnowflake(first)) {
+          setSelectedGuildIdRaw(first);
+          safeSet(LS.selectedGuild, first);
+        }
       } catch (e) {
         if (e?.name === "AbortError") return;
         setGuildWarn(safeErrorMessage(e?.message || "Failed to load guilds."));
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed]);
 
   // Persist selected guild once we have a valid one
   useEffect(() => {
     if (!authed) return;
-    if (!selectedGuildId) return;
+    if (!isSnowflake(selectedGuildId)) return;
     safeSet(LS.selectedGuild, selectedGuildId);
   }, [authed, selectedGuildId]);
 
   // On guild change: install gate + settings
   useEffect(() => {
     if (!authed) return;
-    if (!selectedGuildId) return;
+
+    // ✅ hard guard: never call any guild routes unless valid snowflake
+    if (!isSnowflake(selectedGuildId)) return;
 
     setDirty(false);
 
@@ -590,11 +633,19 @@ export default function DashboardPage() {
     setInstall((s) => ({ ...s, loading: true, warning: "" }));
     (async () => {
       try {
-        const data = await fetchJson(STATUS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
-        const rawWarn = safeErrorMessage(data?.warning || "");
-        const warn = rawWarn === "Missing guildId." ? "" : rawWarn;
+        const data = await fetchJson(STATUS_ENDPOINT(selectedGuildId), {
+          cache: "no-store",
+          signal: ac.signal,
+        });
 
-        setInstall({ loading: false, installed: data?.installed ?? null, warning: warn });
+        const rawWarn = safeErrorMessage(data?.warning || "");
+        const warn = rawWarn === "Missing/invalid guildId." ? "" : rawWarn;
+
+        setInstall({
+          loading: false,
+          installed: data?.installed ?? null,
+          warning: warn,
+        });
 
         if (data?.installed === true) showToast("Gate open. WoC is present. ✨", "story");
         else if (data?.installed === false) showToast("Gate closed. Invite WoC to awaken controls. 🔒", "omen");
@@ -614,10 +665,14 @@ export default function DashboardPage() {
 
     (async () => {
       try {
-        const data = await fetchJson(SETTINGS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
+        const data = await fetchJson(SETTINGS_ENDPOINT(selectedGuildId), {
+          cache: "no-store",
+          signal: ac.signal,
+        });
         setSettings(data.settings);
       } catch (e) {
         if (e?.name === "AbortError") return;
+        // fallback defaults (still safe)
         setSettings(ensureDefaultSettings(selectedGuildId));
       } finally {
         if (!ac.signal.aborted) setSettingsLoading(false);
@@ -625,10 +680,10 @@ export default function DashboardPage() {
     })();
   }, [authed, selectedGuildId]);
 
-  // On guild change: fetch channels for pickers (guarded so no “Missing guildId”)
+  // On guild change: fetch channels for pickers
   useEffect(() => {
     if (!authed) return;
-    if (!selectedGuildId) return;
+    if (!isSnowflake(selectedGuildId)) return;
 
     if (channelsAbortRef.current) channelsAbortRef.current.abort();
     const ac = new AbortController();
@@ -640,18 +695,19 @@ export default function DashboardPage() {
 
     (async () => {
       try {
-        const data = await fetchJson(CHANNELS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
+        const data = await fetchJson(CHANNELS_ENDPOINT(selectedGuildId), {
+          cache: "no-store",
+          signal: ac.signal,
+        });
         const list = Array.isArray(data.channels) ? data.channels : [];
         setChannels(list);
 
-        const rawWarn = safeErrorMessage(data.warning || "");
-        const warn = rawWarn === "Missing guildId." ? "" : rawWarn;
-        setChannelsWarn(warn || "");
+        const warn = safeErrorMessage(data.warning || "");
+        setChannelsWarn(warn && warn !== "Missing/invalid guildId." ? warn : "");
       } catch (e) {
         if (e?.name === "AbortError") return;
         const msg = safeErrorMessage(e?.message || "Failed to load channels.");
-        // Hide the one you were seeing, just in case any edge case slips through
-        setChannelsWarn(msg === "Missing guildId." ? "" : msg);
+        setChannelsWarn(msg === "Missing/invalid guildId." ? "" : msg);
       } finally {
         if (!ac.signal.aborted) setChannelsLoading(false);
       }
@@ -661,7 +717,9 @@ export default function DashboardPage() {
   }, [authed, selectedGuildId]);
 
   async function saveSettings() {
-    if (!selectedGuildId || !settings) return;
+    // ✅ never save without a valid guildId
+    if (!isSnowflake(selectedGuildId) || !settings) return;
+
     setSettingsLoading(true);
     try {
       const data = await fetchJson(SETTINGS_ENDPOINT(selectedGuildId), {
@@ -669,6 +727,7 @@ export default function DashboardPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(settings),
       });
+
       setSettings(data.settings);
       setDirty(false);
       showToast("Settings sealed. ✅", "playful");
@@ -712,7 +771,11 @@ export default function DashboardPage() {
     const q = moduleSearch.trim().toLowerCase();
     const subs = activeCategory?.subs || [];
     if (!q) return subs;
-    return subs.filter((s) => (s.label + " " + s.desc).toLowerCase().includes(q) || s.key.toLowerCase().includes(q));
+    return subs.filter(
+      (s) =>
+        (s.label + " " + s.desc).toLowerCase().includes(q) ||
+        s.key.toLowerCase().includes(q)
+    );
   }, [activeCategory, moduleSearch]);
 
   function setModuleEnabled(categoryKey, enabled) {
@@ -746,7 +809,12 @@ export default function DashboardPage() {
     return list.filter((c) => {
       const t = String(c?.type || "").toLowerCase();
       const label = String(c?.typeLabel || "").toLowerCase();
-      return t.includes("text") || label.includes("text") || t.includes("announcement") || label.includes("announce");
+      return (
+        t.includes("text") ||
+        label.includes("text") ||
+        t.includes("announcement") ||
+        label.includes("announce")
+      );
     });
   }, [channels]);
 
@@ -838,7 +906,9 @@ export default function DashboardPage() {
                     value={selectedGuildId}
                     disabled={!guilds.length}
                     onChange={(gid) => {
-                      setSelectedGuildIdRaw(String(gid));
+                      const next = String(gid);
+                      setSelectedGuildIdRaw(next);
+                      safeSet(LS.selectedGuild, next);
                       setSubtab("overview");
                       woc?.setMood?.("story");
                       setModuleSearch("");
@@ -853,7 +923,7 @@ export default function DashboardPage() {
                   </div>
                 ) : null}
 
-                {channelsWarn && selectedGuildId ? (
+                {channelsWarn && isSnowflake(selectedGuildId) ? (
                   <div className="mt-4 text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
                     <div className="font-semibold">Channel list notice</div>
                     <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{channelsWarn}</div>
@@ -870,9 +940,9 @@ export default function DashboardPage() {
                     <a
                       className={cx(
                         "mt-3 inline-flex items-center gap-2 woc-btn-primary",
-                        !clientId || !selectedGuildId ? "opacity-60 cursor-not-allowed" : ""
+                        !clientId || !isSnowflake(selectedGuildId) ? "opacity-60 cursor-not-allowed" : ""
                       )}
-                      href={clientId && selectedGuildId ? inviteLinkForGuild(selectedGuildId) : undefined}
+                      href={clientId && isSnowflake(selectedGuildId) ? inviteLinkForGuild(selectedGuildId) : undefined}
                       target="_blank"
                       rel="noreferrer"
                       onClick={() => woc?.setMood?.("battle")}
@@ -899,16 +969,33 @@ export default function DashboardPage() {
                 <SectionTitle title="Control seal" subtitle="Changes persist per server." />
                 <div className="mt-4 flex flex-col gap-2">
                   <button
-                    className={cx("woc-btn-primary", !gateInstalled || !dirty || settingsLoading ? "opacity-60 cursor-not-allowed" : "")}
-                    disabled={!gateInstalled || !dirty || settingsLoading}
+                    className={cx(
+                      "woc-btn-primary",
+                      !gateInstalled || !dirty || settingsLoading || !isSnowflake(selectedGuildId)
+                        ? "opacity-60 cursor-not-allowed"
+                        : ""
+                    )}
+                    disabled={!gateInstalled || !dirty || settingsLoading || !isSnowflake(selectedGuildId)}
                     onClick={saveSettings}
-                    title={!gateInstalled ? "Invite WoC to unlock saving." : !dirty ? "No changes yet." : "Save changes"}
+                    title={
+                      !isSnowflake(selectedGuildId)
+                        ? "Pick a server first."
+                        : !gateInstalled
+                        ? "Invite WoC to unlock saving."
+                        : !dirty
+                        ? "No changes yet."
+                        : "Save changes"
+                    }
                   >
                     {settingsLoading ? "Saving…" : dirty ? "Save changes ✅" : "Saved"}
                   </button>
 
                   <div className="text-[0.72rem] text-[var(--text-muted)]">
-                    {gateInstalled ? (dirty ? "WoC is watching. Commit the ritual." : "All quiet. No edits pending.") : "Gate closed. Invite WoC to enable editing."}
+                    {gateInstalled
+                      ? dirty
+                        ? "WoC is watching. Commit the ritual."
+                        : "All quiet. No edits pending."
+                      : "Gate closed. Invite WoC to enable editing."}
                   </div>
                 </div>
               </div>
@@ -925,7 +1012,9 @@ export default function DashboardPage() {
                       key={g.id}
                       type="button"
                       onClick={() => {
-                        setSelectedGuildIdRaw(String(g.id));
+                        const next = String(g.id);
+                        setSelectedGuildIdRaw(next);
+                        safeSet(LS.selectedGuild, next);
                         setSubtab("overview");
                         woc?.setMood?.("story");
                         setModuleSearch("");
@@ -950,7 +1039,9 @@ export default function DashboardPage() {
               </div>
 
               {guilds.length > 12 ? (
-                <div className="mt-3 text-[0.72rem] text-[var(--text-muted)]">Showing 12. Use the selector for the full list.</div>
+                <div className="mt-3 text-[0.72rem] text-[var(--text-muted)]">
+                  Showing 12. Use the selector for the full list.
+                </div>
               ) : null}
             </div>
 
@@ -1004,11 +1095,15 @@ export default function DashboardPage() {
                           </div>
                           <div className="woc-card p-3">
                             <div className="text-xs text-[var(--text-muted)]">Welcome</div>
-                            <div className="text-lg font-semibold mt-1">{settings.welcome?.enabled ? "On" : "Off"}</div>
+                            <div className="text-lg font-semibold mt-1">
+                              {settings.welcome?.enabled ? "On" : "Off"}
+                            </div>
                           </div>
                           <div className="woc-card p-3">
                             <div className="text-xs text-[var(--text-muted)]">Logs</div>
-                            <div className="text-lg font-semibold mt-1">{settings.logs?.enabled ? "On" : "Off"}</div>
+                            <div className="text-lg font-semibold mt-1">
+                              {settings.logs?.enabled ? "On" : "Off"}
+                            </div>
                           </div>
                           <div className="woc-card p-3">
                             <div className="text-xs text-[var(--text-muted)]">Mood</div>
@@ -1034,7 +1129,9 @@ export default function DashboardPage() {
                     <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
                       <div className="woc-card p-4">
                         <div className="font-semibold">Modules</div>
-                        <div className="text-xs text-[var(--text-muted)] mt-1">Pick a category on the left.</div>
+                        <div className="text-xs text-[var(--text-muted)] mt-1">
+                          Pick a category on the left.
+                        </div>
 
                         <div className="mt-4 space-y-2">
                           {MODULE_TREE.map((cat) => {
@@ -1062,7 +1159,9 @@ export default function DashboardPage() {
                                     <div className="font-semibold truncate">
                                       {cat.emoji} {cat.label}
                                     </div>
-                                    <div className="text-[0.72rem] text-[var(--text-muted)] mt-1 truncate">{cat.desc}</div>
+                                    <div className="text-[0.72rem] text-[var(--text-muted)] mt-1 truncate">
+                                      {cat.desc}
+                                    </div>
                                   </div>
                                   <span
                                     className={cx(
@@ -1087,7 +1186,9 @@ export default function DashboardPage() {
                             <div className="font-semibold text-xl">
                               {activeCategory?.emoji} {activeCategory?.label}
                             </div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">{activeCategory?.desc}</div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">
+                              {activeCategory?.desc}
+                            </div>
                           </div>
 
                           <label className="inline-flex items-center gap-2">
@@ -1121,7 +1222,8 @@ export default function DashboardPage() {
                         <div className="mt-4 grid gap-4 sm:grid-cols-2">
                           {filteredSubs.map((s) => {
                             const catEnabled = !!settings.modules?.[activeCategory.key]?.enabled;
-                            const subEnabled = settings.modules?.[activeCategory.key]?.subs?.[s.key] ?? true;
+                            const subEnabled =
+                              settings.modules?.[activeCategory.key]?.subs?.[s.key] ?? true;
 
                             return (
                               <div key={s.key} className="woc-card p-4 flex flex-col justify-between">
@@ -1164,8 +1266,8 @@ export default function DashboardPage() {
                         </div>
 
                         <div className="mt-4 text-[0.72rem] text-[var(--text-muted)]">
-                          This panel controls feature flags. Next step is wiring your bot to read <b>settings.modules</b> and
-                          block/allow commands accordingly.
+                          This panel controls feature flags. Next step is wiring your bot to read{" "}
+                          <b>settings.modules</b> and block/allow commands accordingly.
                         </div>
                       </div>
                     </div>
@@ -1214,7 +1316,7 @@ export default function DashboardPage() {
                         </label>
 
                         {[
-                          ["generalChannelId", "General logs channel"],
+                          ["generalChannelId", "General logs channel suggests"],
                           ["modlogChannelId", "Mod logs channel"],
                           ["joinChannelId", "Join logs channel"],
                           ["leaveChannelId", "Leave logs channel"],
@@ -1284,7 +1386,6 @@ export default function DashboardPage() {
                               setSettings((s) => ({ ...s, welcome: { ...s.welcome, channelId: val } }));
                               setDirty(true);
                             }}
-                            noneLabel="Select a channel"
                             allowNone={false}
                             placeholder="Select a channel"
                           />
@@ -1416,7 +1517,9 @@ export default function DashboardPage() {
 
                         <label className="woc-card p-4">
                           <div className="font-semibold text-sm">Sass level</div>
-                          <div className="text-xs text-[var(--text-muted)] mt-1">0 = polite librarian, 100 = chaotic bard.</div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">
+                            0 = polite librarian, 100 = chaotic bard.
+                          </div>
 
                           <input
                             type="range"
@@ -1471,7 +1574,10 @@ export default function DashboardPage() {
                   {/* ACTION LOG */}
                   {subtab === "actionlog" ? (
                     <div className="space-y-3">
-                      <SectionTitle title="Action log" subtitle="Soon: admin actions, toggles changed, mod events (from bot/webhook)." />
+                      <SectionTitle
+                        title="Action log"
+                        subtitle="Soon: admin actions, toggles changed, mod events (from bot/webhook)."
+                      />
                       <div className="woc-card p-4 text-sm text-[var(--text-muted)]">
                         No entries yet. The chronicle is empty… suspiciously peaceful.
                       </div>
