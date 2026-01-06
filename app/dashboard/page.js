@@ -10,11 +10,10 @@ const LS = { selectedGuild: "woc-selected-guild" };
 
 // Endpoints (App Router)
 const GUILDS_ENDPOINT = "/api/discord/guilds";
-const STATUS_ENDPOINT = (gid) => `/api/guilds/${gid}/status`;
-const SETTINGS_ENDPOINT = (gid) => `/api/guilds/${gid}/settings`;
-const CHANNELS_ENDPOINT = (gid) => `/api/guilds/${gid}/channels`;
+const STATUS_ENDPOINT = (gid) => `/api/guilds/${encodeURIComponent(gid)}/status`;
+const SETTINGS_ENDPOINT = (gid) => `/api/guilds/${encodeURIComponent(gid)}/settings`;
+const CHANNELS_ENDPOINT = (gid) => `/api/guilds/${encodeURIComponent(gid)}/channels`;
 
-/** Safe localStorage */
 function safeGet(key, fallback = "") {
   try {
     const v = localStorage.getItem(key);
@@ -30,8 +29,13 @@ function safeSet(key, val) {
     localStorage.setItem(key, String(val ?? ""));
   } catch {}
 }
+function safeDel(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch {}
+}
 
-/** Discord snowflake guard */
+// Discord snowflake guard (prevents "undefined" / junk from ever being used)
 function isSnowflake(id) {
   const s = String(id || "").trim();
   if (!s) return false;
@@ -39,11 +43,23 @@ function isSnowflake(id) {
   return /^[0-9]{17,20}$/.test(s);
 }
 
+function deepClone(obj) {
+  try {
+    // structuredClone exists in modern browsers
+    // eslint-disable-next-line no-undef
+    if (typeof structuredClone === "function") return structuredClone(obj);
+  } catch {}
+  return JSON.parse(JSON.stringify(obj));
+}
+
 function safeErrorMessage(input) {
   const msg = String(input || "").trim();
   if (!msg) return "";
   const looksLikeHtml =
-    msg.includes("<!DOCTYPE") || msg.includes("<html") || msg.includes("<body") || msg.includes("<head");
+    msg.includes("<!DOCTYPE") ||
+    msg.includes("<html") ||
+    msg.includes("<body") ||
+    msg.includes("<head");
   if (looksLikeHtml) return "Non-JSON/HTML response received (route missing or misrouted).";
   return msg.length > 260 ? msg.slice(0, 260) + "…" : msg;
 }
@@ -63,7 +79,9 @@ async function fetchJson(url, opts = {}) {
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    const e = new Error(safeErrorMessage(data?.error || data?.warning || `Request failed (${res.status})`));
+    const e = new Error(
+      safeErrorMessage(data?.error || data?.warning || `Request failed (${res.status})`)
+    );
     e.status = res.status;
     e.data = data;
     throw e;
@@ -74,16 +92,6 @@ async function fetchJson(url, opts = {}) {
 
 function cx(...parts) {
   return parts.filter(Boolean).join(" ");
-}
-
-function cloneDeep(obj) {
-  try {
-    // structuredClone is great if available
-    return structuredClone(obj);
-  } catch {
-    // fallback
-    return JSON.parse(JSON.stringify(obj ?? {}));
-  }
 }
 
 function Pill({ tone = "default", children }) {
@@ -144,7 +152,10 @@ function IconCircle({ guild, size = 40 }) {
 function GuildPicker({ guilds, value, onChange, disabled }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
-  const selected = useMemo(() => guilds.find((g) => String(g.id) === String(value)) || null, [guilds, value]);
+  const selected = useMemo(
+    () => guilds.find((g) => String(g.id) === String(value)) || null,
+    [guilds, value]
+  );
 
   useEffect(() => {
     function onDoc(e) {
@@ -224,7 +235,7 @@ function GuildPicker({ guilds, value, onChange, disabled }) {
   );
 }
 
-/** Simple channel picker */
+/** Simple channel picker (name + #hash) */
 function ChannelPicker({
   channels,
   value,
@@ -235,6 +246,7 @@ function ChannelPicker({
   noneLabel = "None",
 }) {
   const list = Array.isArray(channels) ? channels : [];
+
   return (
     <select
       value={value || ""}
@@ -263,7 +275,9 @@ function ChannelPicker({
   );
 }
 
-/** Module tree */
+/**
+ * Modules based on your command folders.
+ */
 const MODULE_TREE = [
   {
     key: "moderation",
@@ -361,14 +375,14 @@ const MODULE_TREE = [
       { key: "kiss", label: "Kiss", desc: "Kiss interactions." },
       { key: "cuddle", label: "Cuddle", desc: "Cuddle interactions." },
       { key: "pat", label: "Pat", desc: "Pat interactions." },
-      { key: "slap", label: "Slap", desc: "Slap interactions." },
-      { key: "punch", label: "Punch", desc: "Punch interactions." },
-      { key: "poke", label: "Poke", desc: "Poke interactions." },
-      { key: "bite", label: "Bite", desc: "Bite interactions." },
-      { key: "tickle", label: "Tickle", desc: "Tickle interactions." },
-      { key: "baka", label: "Baka", desc: "Baka interactions." },
-      { key: "smug", label: "Smug", desc: "Smug interactions." },
-      { key: "chase", label: "Chase", desc: "Chase interactions." },
+      { key: "slap", label: "Slap interactions." },
+      { key: "punch", label: "Punch interactions." },
+      { key: "poke", label: "Poke interactions." },
+      { key: "bite", label: "Bite interactions." },
+      { key: "tickle", label: "Tickle interactions." },
+      { key: "baka", label: "Baka interactions." },
+      { key: "smug", label: "Smug interactions." },
+      { key: "chase", label: "Chase interactions." },
       { key: "jokegif", label: "Joke GIF", desc: "GIF jokes." },
       { key: "fish", label: "Fish", desc: "Fishing mini-fun." },
       { key: "feed", label: "Feed", desc: "Feeding interaction." },
@@ -490,14 +504,14 @@ export default function DashboardPage() {
   const [guilds, setGuilds] = useState([]);
   const [guildWarn, setGuildWarn] = useState("");
 
+  // Store raw localStorage value, but never let it cause API calls until validated.
   const [selectedGuildIdRaw, setSelectedGuildIdRaw] = useState(() => safeGet(LS.selectedGuild, ""));
 
-  // Only treat as selected if: snowflake AND exists in list. Otherwise fallback to first.
+  // Chosen guild must be a real snowflake AND exist in list.
   const selectedGuildId = useMemo(() => {
     const raw = String(selectedGuildIdRaw || "").trim();
     if (!guilds.length) return "";
-    const rawOk = isSnowflake(raw) && guilds.some((g) => String(g.id) === raw);
-    if (rawOk) return raw;
+    if (isSnowflake(raw) && guilds.some((g) => String(g.id) === raw)) return raw;
 
     const first = String(guilds[0]?.id || "");
     return isSnowflake(first) ? first : "";
@@ -508,7 +522,11 @@ export default function DashboardPage() {
     [guilds, selectedGuildId]
   );
 
-  const [install, setInstall] = useState({ loading: false, installed: null, warning: "" });
+  const [install, setInstall] = useState({
+    loading: false,
+    installed: null, // true/false/null
+    warning: "",
+  });
 
   const [subtab, setSubtab] = useState("overview");
   const [toast, setToast] = useState("");
@@ -518,20 +536,17 @@ export default function DashboardPage() {
   const [settings, setSettings] = useState(null);
   const [dirty, setDirty] = useState(false);
 
+  // Channels for pickers
   const [channelsLoading, setChannelsLoading] = useState(false);
   const [channelsWarn, setChannelsWarn] = useState("");
   const [channels, setChannels] = useState([]);
-
-  // Debug snapshots (helps catch “Missing/invalid guildId” without guessing)
-  const [dbgStatus, setDbgStatus] = useState(null);
-  const [dbgSettings, setDbgSettings] = useState(null);
-  const [dbgChannels, setDbgChannels] = useState(null);
 
   const guildFetchOnceRef = useRef(false);
   const guildAbortRef = useRef(null);
   const perGuildAbortRef = useRef(null);
   const channelsAbortRef = useRef(null);
 
+  // Modules panel UI state
   const [moduleCategory, setModuleCategory] = useState("moderation");
   const [moduleSearch, setModuleSearch] = useState("");
 
@@ -546,6 +561,12 @@ export default function DashboardPage() {
     toastTimer.current = setTimeout(() => setToast(""), 2200);
   }
 
+  function resetSelectedGuild() {
+    safeDel(LS.selectedGuild);
+    setSelectedGuildIdRaw("");
+    showToast("Selection wiped. Pick a server again. 🧽", "playful");
+  }
+
   useEffect(() => {
     return () => {
       if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -555,7 +576,7 @@ export default function DashboardPage() {
     };
   }, []);
 
-  // Load guilds once per authenticated session
+  // Load manageable guilds (once per authed session)
   useEffect(() => {
     if (!authed) {
       setGuilds([]);
@@ -575,17 +596,18 @@ export default function DashboardPage() {
       try {
         setGuildWarn("");
         const data = await fetchJson(GUILDS_ENDPOINT, { cache: "no-store", signal: ac.signal });
+
         const list = Array.isArray(data.guilds) ? data.guilds : [];
         setGuilds(list);
 
         const warn = safeErrorMessage(data.warning || data.error || "");
         if (warn) setGuildWarn(warn);
 
-        // Force local storage to a valid id once we have the list
+        // Once guilds arrive, force raw selection to a real id
         const raw = String(selectedGuildIdRaw || "").trim();
         const first = String(list[0]?.id || "");
-        const rawOk = isSnowflake(raw) && list.some((g) => String(g.id) === raw);
-        if (!rawOk && isSnowflake(first)) {
+        const validRaw = isSnowflake(raw) && list.some((g) => String(g.id) === raw);
+        if (!validRaw && isSnowflake(first)) {
           setSelectedGuildIdRaw(first);
           safeSet(LS.selectedGuild, first);
         }
@@ -597,40 +619,35 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed]);
 
-  // Persist selected guild
+  // Persist selected guild once we have a valid one
   useEffect(() => {
     if (!authed) return;
     if (!isSnowflake(selectedGuildId)) return;
     safeSet(LS.selectedGuild, selectedGuildId);
   }, [authed, selectedGuildId]);
 
-  // On guild change: status + settings
+  // On guild change: install gate + settings
   useEffect(() => {
     if (!authed) return;
     if (!isSnowflake(selectedGuildId)) return;
 
     setDirty(false);
-    setDbgStatus(null);
-    setDbgSettings(null);
 
     if (perGuildAbortRef.current) perGuildAbortRef.current.abort();
     const ac = new AbortController();
     perGuildAbortRef.current = ac;
 
-    // Status / install gate
+    // install check (soft warnings)
     setInstall((s) => ({ ...s, loading: true, warning: "" }));
     (async () => {
       try {
         const data = await fetchJson(STATUS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
-        setDbgStatus(data);
-
         const rawWarn = safeErrorMessage(data?.warning || "");
-        const warn = rawWarn === "Missing/invalid guildId." ? "" : rawWarn;
-
-        setInstall({ loading: false, installed: data?.installed ?? null, warning: warn });
-
-        if (data?.installed === true) showToast("Gate open. WoC is present. ✨", "story");
-        else if (data?.installed === false) showToast("Gate closed. Invite WoC to awaken controls. 🔒", "omen");
+        setInstall({
+          loading: false,
+          installed: data?.installed ?? null,
+          warning: rawWarn === "Missing/invalid guildId." ? "" : rawWarn,
+        });
       } catch (e) {
         if (e?.name === "AbortError") return;
         setInstall({
@@ -641,14 +658,13 @@ export default function DashboardPage() {
       }
     })();
 
-    // Settings fetch
+    // settings fetch
     setSettingsLoading(true);
     setSettings(null);
 
     (async () => {
       try {
         const data = await fetchJson(SETTINGS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
-        setDbgSettings(data);
         setSettings(data.settings);
       } catch (e) {
         if (e?.name === "AbortError") return;
@@ -657,16 +673,12 @@ export default function DashboardPage() {
         if (!ac.signal.aborted) setSettingsLoading(false);
       }
     })();
-
-    return () => ac.abort();
   }, [authed, selectedGuildId]);
 
-  // On guild change: channels fetch
+  // On guild change: fetch channels for pickers
   useEffect(() => {
     if (!authed) return;
     if (!isSnowflake(selectedGuildId)) return;
-
-    setDbgChannels(null);
 
     if (channelsAbortRef.current) channelsAbortRef.current.abort();
     const ac = new AbortController();
@@ -679,8 +691,6 @@ export default function DashboardPage() {
     (async () => {
       try {
         const data = await fetchJson(CHANNELS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
-        setDbgChannels(data);
-
         const list = Array.isArray(data.channels) ? data.channels : [];
         setChannels(list);
 
@@ -709,7 +719,6 @@ export default function DashboardPage() {
         body: JSON.stringify(settings),
       });
 
-      setDbgSettings(data);
       setSettings(data.settings);
       setDirty(false);
       showToast("Settings sealed. ✅", "playful");
@@ -753,12 +762,12 @@ export default function DashboardPage() {
     const q = moduleSearch.trim().toLowerCase();
     const subs = activeCategory?.subs || [];
     if (!q) return subs;
-    return subs.filter((s) => (s.label + " " + s.desc).toLowerCase().includes(q) || s.key.toLowerCase().includes(q));
+    return subs.filter((s) => (s.label + " " + (s.desc || "")).toLowerCase().includes(q) || s.key.toLowerCase().includes(q));
   }, [activeCategory, moduleSearch]);
 
   function setModuleEnabled(categoryKey, enabled) {
     setSettings((prev) => {
-      const next = cloneDeep(prev);
+      const next = deepClone(prev);
       next.modules ||= {};
       next.modules[categoryKey] ||= { enabled: false, subs: {} };
       next.modules[categoryKey].enabled = !!enabled;
@@ -769,7 +778,7 @@ export default function DashboardPage() {
 
   function setSubEnabled(categoryKey, subKey, enabled) {
     setSettings((prev) => {
-      const next = cloneDeep(prev);
+      const next = deepClone(prev);
       next.modules ||= {};
       next.modules[categoryKey] ||= { enabled: true, subs: {} };
       next.modules[categoryKey].subs ||= {};
@@ -860,7 +869,11 @@ export default function DashboardPage() {
                       {channelsLoading ? <Pill>Loading channels…</Pill> : null}
                       {install.installed === true ? <Pill tone="ok">Installed ✅</Pill> : null}
                       {install.installed === false ? <Pill tone="warn">Not installed 🔒</Pill> : null}
+                      {!isSnowflake(selectedGuildId) ? <Pill tone="warn">Pick a server</Pill> : null}
                       {showNoticePill ? <Pill tone="warn">Notice ⚠️</Pill> : null}
+                      <button type="button" className="woc-btn-ghost text-xs" onClick={resetSelectedGuild}>
+                        Reset selection
+                      </button>
                     </div>
                   }
                 />
@@ -928,31 +941,12 @@ export default function DashboardPage() {
                         Missing NEXT_PUBLIC_DISCORD_CLIENT_ID. Add it to Vercel env and redeploy.
                       </div>
                     ) : (
-                      <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">Once invited, refresh this page.</div>
+                      <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
+                        Once invited, refresh this page. Gate opens automatically.
+                      </div>
                     )}
                   </div>
                 ) : null}
-
-                {/* Tiny debug strip (so we stop guessing) */}
-                <div className="mt-4 text-[0.72rem] text-[var(--text-muted)]">
-                  <div>
-                    guildIdRaw: <span className="text-[var(--text-main)] font-semibold">{String(selectedGuildIdRaw || "")}</span>
-                  </div>
-                  <div>
-                    guildIdUsed:{" "}
-                    <span className="text-[var(--text-main)] font-semibold">{String(selectedGuildId || "")}</span>{" "}
-                    {isSnowflake(selectedGuildId) ? <span className="text-emerald-200/90">(snowflake ok)</span> : <span className="text-amber-200/90">(invalid)</span>}
-                  </div>
-                  <div className="mt-1">
-                    status dbg: <span className="text-[var(--text-main)]">{dbgStatus ? JSON.stringify(dbgStatus) : "—"}</span>
-                  </div>
-                  <div className="mt-1">
-                    settings dbg: <span className="text-[var(--text-main)]">{dbgSettings ? JSON.stringify(dbgSettings) : "—"}</span>
-                  </div>
-                  <div className="mt-1">
-                    channels dbg: <span className="text-[var(--text-main)]">{dbgChannels ? JSON.stringify(dbgChannels) : "—"}</span>
-                  </div>
-                </div>
               </div>
 
               {/* Save panel */}
@@ -988,55 +982,19 @@ export default function DashboardPage() {
                         : "All quiet. No edits pending."
                       : "Gate closed. Invite WoC to enable editing."}
                   </div>
+
+                  {/* tiny debug strip */}
+                  <div className="mt-2 text-[0.7rem] text-[var(--text-muted)]">
+                    Selected guildId:{" "}
+                    <span className={cx("font-semibold", isSnowflake(selectedGuildId) ? "text-emerald-200" : "text-amber-200")}>
+                      {selectedGuildId || "(none)"}
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
 
-            {/* Servers grid */}
-            <div className="mt-6 woc-card p-5">
-              <SectionTitle title="Servers" subtitle={`Servers you can manage (${guilds.length})`} />
-              <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                {guilds.slice(0, 12).map((g) => {
-                  const active = String(g.id) === String(selectedGuildId);
-                  return (
-                    <button
-                      key={g.id}
-                      type="button"
-                      onClick={() => {
-                        const next = String(g.id);
-                        setSelectedGuildIdRaw(next);
-                        safeSet(LS.selectedGuild, next);
-                        setSubtab("overview");
-                        woc?.setMood?.("story");
-                        setModuleSearch("");
-                      }}
-                      className={cx(
-                        "text-left rounded-3xl overflow-hidden border transition",
-                        "border-[var(--border-subtle)]/70",
-                        "bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] hover:bg-[color-mix(in_oklab,var(--bg-card)_85%,transparent)]",
-                        active ? "ring-2 ring-[var(--accent)]/40" : ""
-                      )}
-                    >
-                      <div className="p-4 flex items-center gap-3">
-                        <IconCircle guild={g} size={52} />
-                        <div className="min-w-0">
-                          <div className="font-semibold truncate">{g.name}</div>
-                          <div className="text-xs text-[var(--text-muted)] truncate">{g.role || "Manager"}</div>
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {guilds.length > 12 ? (
-                <div className="mt-3 text-[0.72rem] text-[var(--text-muted)]">
-                  Showing 12. Use the selector for the full list.
-                </div>
-              ) : null}
-            </div>
-
-            {/* Secondary navbar */}
+            {/* Secondary navbar + panels */}
             <div className="mt-6 woc-card p-5">
               <div className="flex flex-wrap gap-2">
                 {subnav.map(([k, label]) => (
@@ -1077,7 +1035,7 @@ export default function DashboardPage() {
                     <div className="grid gap-4 lg:grid-cols-3">
                       <div className="woc-card p-4 lg:col-span-2">
                         <div className="font-semibold">Server snapshot</div>
-                        <div className="text-xs text-[var(--text-muted)] mt-1">Live settings in Mongo.</div>
+                        <div className="text-xs text-[var(--text-muted)] mt-1">Live settings in Mongo (once your API is happy).</div>
 
                         <div className="mt-4 grid grid-cols-2 gap-3">
                           <div className="woc-card p-3">
@@ -1105,7 +1063,7 @@ export default function DashboardPage() {
                           “A server is a living map. Modules are the weather. Choose wisely.”
                         </div>
                         <div className="mt-3 text-[0.72rem] text-[var(--text-muted)]">
-                          Next step: wire bot runtime to respect these flags.
+                          If <b>/settings</b> is returning 400 “Missing guildId”, that is server-route-side, not the dashboard.
                         </div>
                       </div>
                     </div>
@@ -1210,7 +1168,7 @@ export default function DashboardPage() {
                                 <div className="flex items-start justify-between gap-3">
                                   <div className="min-w-0">
                                     <div className="font-semibold truncate">{s.label}</div>
-                                    <div className="text-xs text-[var(--text-muted)] mt-1">{s.desc}</div>
+                                    <div className="text-xs text-[var(--text-muted)] mt-1">{s.desc || ""}</div>
                                     <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
                                       Key:{" "}
                                       <span className="font-semibold text-[var(--text-main)]">
@@ -1306,7 +1264,7 @@ export default function DashboardPage() {
                           <div key={k} className="woc-card p-4">
                             <div className="font-semibold text-sm">{label}</div>
                             <div className="text-xs text-[var(--text-muted)] mt-1">
-                              Pick a channel. (If empty: logs for that category are effectively “unrouted”.)
+                              Pick a channel. (If empty: logs for that category are effectively unrouted.)
                             </div>
 
                             <ChannelPicker
@@ -1321,7 +1279,9 @@ export default function DashboardPage() {
                             />
 
                             {!gateInstalled ? (
-                              <div className="mt-2 text-[0.72rem] text-amber-200/90">Gate closed. Invite WoC to edit.</div>
+                              <div className="mt-2 text-[0.72rem] text-amber-200/90">
+                                Gate closed. Invite WoC to enable editing.
+                              </div>
                             ) : null}
                           </div>
                         ))}
@@ -1366,7 +1326,9 @@ export default function DashboardPage() {
                           />
 
                           {!gateInstalled ? (
-                            <div className="mt-2 text-[0.72rem] text-amber-200/90">Gate closed. Invite WoC to edit.</div>
+                            <div className="mt-2 text-[0.72rem] text-amber-200/90">
+                              Gate closed. Invite WoC to enable editing.
+                            </div>
                           ) : null}
                         </div>
 
@@ -1545,7 +1507,10 @@ export default function DashboardPage() {
                   {/* ACTION LOG */}
                   {subtab === "actionlog" ? (
                     <div className="space-y-3">
-                      <SectionTitle title="Action log" subtitle="Soon: admin actions, toggles changed, mod events (from bot/webhook)." />
+                      <SectionTitle
+                        title="Action log"
+                        subtitle="Soon: admin actions, toggles changed, mod events (from bot/webhook)."
+                      />
                       <div className="woc-card p-4 text-sm text-[var(--text-muted)]">
                         No entries yet. The chronicle is empty… suspiciously peaceful.
                       </div>
