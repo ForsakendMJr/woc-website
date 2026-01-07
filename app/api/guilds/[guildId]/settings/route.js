@@ -4,6 +4,24 @@ import GuildSettings from "@/app/models/GuildSettings";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * These keys MUST match your dashboard MODULE_TREE category keys
+ * and your bot CATEGORY_TO_MODULE_KEY mapping.
+ */
+const MODULE_KEYS = [
+  "moderation",
+  "logging",
+  "clan",
+  "combat",
+  "economy",
+  "fun",
+  "marriage",
+  "housing",
+  "quest",
+  "utility",
+  "application",
+];
+
 function isSnowflake(x) {
   const s = String(x || "").trim();
   return /^\d{17,20}$/.test(s);
@@ -53,9 +71,31 @@ function defaultSettings(guildId) {
       message: "Welcome {user} to **{server}**! ✨",
       autoRoleId: "",
     },
-    modules: {},
+    // ✅ IMPORTANT: default modules ON (subs can be empty; dashboard treats missing subs as true)
+    modules: MODULE_KEYS.reduce((acc, k) => {
+      acc[k] = { enabled: true, subs: {} };
+      return acc;
+    }, {}),
     personality: { mood: "story", sass: 35, narration: true },
   };
+}
+
+/**
+ * Merge defaults without overwriting explicit false values.
+ * - If category missing -> add it (enabled true)
+ * - If enabled missing -> set true
+ * - subs: we do NOT need to pre-fill, dashboard uses ?? true
+ */
+function mergeModuleDefaults(existingModules) {
+  const out = existingModules && typeof existingModules === "object" ? existingModules : {};
+
+  for (const key of MODULE_KEYS) {
+    if (!out[key] || typeof out[key] !== "object") out[key] = {};
+    if (typeof out[key].enabled !== "boolean") out[key].enabled = true;
+    if (!out[key].subs || typeof out[key].subs !== "object") out[key].subs = {};
+  }
+
+  return out;
 }
 
 export async function GET(req, ctx) {
@@ -72,13 +112,25 @@ export async function GET(req, ctx) {
   try {
     await dbConnect();
 
-    let doc = await GuildSettings.findOne({ guildId }).lean();
+    // ✅ DO NOT lean() here, we want to be able to save migrations
+    let doc = await GuildSettings.findOne({ guildId });
     if (!doc) {
-      const created = await GuildSettings.create(defaultSettings(guildId));
-      doc = created.toObject();
+      doc = await GuildSettings.create(defaultSettings(guildId));
     }
 
-    return NextResponse.json({ ok: true, settings: doc, guildId, warning: "" }, { status: 200 });
+    // ✅ MIGRATION: ensure modules/categories exist + default enabled
+    const before = JSON.stringify(doc.modules || {});
+    doc.modules = mergeModuleDefaults(doc.modules);
+    const after = JSON.stringify(doc.modules || {});
+
+    if (before !== after) {
+      await doc.save();
+    }
+
+    return NextResponse.json(
+      { ok: true, settings: doc.toObject(), guildId, warning: "" },
+      { status: 200 }
+    );
   } catch (e) {
     return NextResponse.json(
       {
@@ -104,16 +156,25 @@ export async function PUT(req, ctx) {
 
   try {
     const body = await req.json().catch(() => ({}));
-    const incoming = body?.settings;
+
+    // ✅ Accept BOTH shapes:
+    // 1) dashboard sends the settings object directly
+    // 2) some clients send { settings: {...} }
+    const incoming =
+      body && typeof body === "object" && body.settings && typeof body.settings === "object"
+        ? body.settings
+        : body;
 
     if (!incoming || typeof incoming !== "object") {
       return NextResponse.json(
-        { ok: true, settings: null, guildId, warning: "Body must be JSON: { settings: { ... } }" },
+        { ok: true, settings: null, guildId, warning: "Body must be JSON." },
         { status: 200 }
       );
     }
 
-    incoming.guildId = guildId; // enforce correct guild
+    // enforce correct guild + ensure modules defaults so UI doesn't flip weirdly
+    incoming.guildId = guildId;
+    incoming.modules = mergeModuleDefaults(incoming.modules);
 
     await dbConnect();
 
@@ -121,9 +182,12 @@ export async function PUT(req, ctx) {
       { guildId },
       { $set: incoming },
       { new: true, upsert: true }
-    ).lean();
+    );
 
-    return NextResponse.json({ ok: true, settings: updated, guildId, warning: "" }, { status: 200 });
+    return NextResponse.json(
+      { ok: true, settings: updated?.toObject?.() ?? updated, guildId, warning: "" },
+      { status: 200 }
+    );
   } catch (e) {
     return NextResponse.json(
       {

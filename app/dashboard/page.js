@@ -458,7 +458,44 @@ const MODULE_TREE = [
   },
 ];
 
+function buildDefaultModulesFromTree(tree) {
+  return tree.reduce((acc, cat) => {
+    acc[cat.key] = {
+      enabled: true, // default ON
+      subs: (cat.subs || []).reduce((m, s) => {
+        m[s.key] = true; // default ON
+        return m;
+      }, {}),
+    };
+    return acc;
+  }, {});
+}
+
+/**
+ * Merge defaults in WITHOUT overwriting explicit false values.
+ * - If modules missing/empty -> fill full defaults
+ * - If category missing -> add it
+ * - If sub missing -> add it
+ */
+function mergeModuleDefaults(existingModules, defaultModules) {
+  const out = existingModules && typeof existingModules === "object" ? deepClone(existingModules) : {};
+
+  for (const [catKey, defCat] of Object.entries(defaultModules)) {
+    if (!out[catKey] || typeof out[catKey] !== "object") out[catKey] = {};
+    if (typeof out[catKey].enabled !== "boolean") out[catKey].enabled = defCat.enabled;
+
+    if (!out[catKey].subs || typeof out[catKey].subs !== "object") out[catKey].subs = {};
+    for (const [subKey, defVal] of Object.entries(defCat.subs || {})) {
+      if (typeof out[catKey].subs[subKey] !== "boolean") out[catKey].subs[subKey] = defVal;
+    }
+  }
+
+  return out;
+}
+
 function ensureDefaultSettings(guildId) {
+  const defaults = buildDefaultModulesFromTree(MODULE_TREE);
+
   return {
     guildId,
     prefix: "!",
@@ -481,16 +518,8 @@ function ensureDefaultSettings(guildId) {
       message: "Welcome {user} to **{server}**! ✨",
       autoRoleId: "",
     },
-    modules: MODULE_TREE.reduce((acc, cat) => {
-      acc[cat.key] = {
-        enabled: cat.key === "moderation" || cat.key === "logging" || cat.key === "utility",
-        subs: (cat.subs || []).reduce((m, s) => {
-          m[s.key] = true;
-          return m;
-        }, {}),
-      };
-      return acc;
-    }, {}),
+    // default modules ON (matches bot fail-open logic)
+    modules: defaults,
     personality: { mood: "story", sass: 35, narration: true },
   };
 }
@@ -696,7 +725,16 @@ export default function DashboardPage() {
           cache: "no-store",
           signal: ac.signal,
         });
-        setSettings(data.settings);
+
+        // ✅ Merge module defaults so UI matches bot fail-open
+        const defMods = buildDefaultModulesFromTree(MODULE_TREE);
+        const mergedModules = mergeModuleDefaults(data?.settings?.modules, defMods);
+
+        setSettings({
+          ...data.settings,
+          guildId: canonicalGuildId,
+          modules: mergedModules,
+        });
       } catch (e) {
         if (e?.name === "AbortError") return;
         setSettings(ensureDefaultSettings(canonicalGuildId));
@@ -706,107 +744,119 @@ export default function DashboardPage() {
     })();
   }, [authed, canonicalGuildId]);
 
-async function fetchChannelsForGuild(gid, signal) {
-  try {
-    const data = await fetchJson(CHANNELS_ENDPOINT(gid), { cache: "no-store", signal });
-    const list = Array.isArray(data.channels) ? data.channels : [];
-    return { channels: list, warning: safeErrorMessage(data.warning || "") };
-  } catch (e) {
-    // If the bot isn't in the guild, Discord returns 403 Missing Access.
-    // Treat that as "not installed" instead of a scary error.
-    const status = e?.status;
-    const body = String(e?.body || e?.message || "");
-    const isMissingAccess =
-      status === 403 ||
-      body.includes('"code": 50001') ||
-      body.toLowerCase().includes("missing access");
+  async function fetchChannelsForGuild(gid, signal) {
+    try {
+      const data = await fetchJson(CHANNELS_ENDPOINT(gid), { cache: "no-store", signal });
+      const list = Array.isArray(data.channels) ? data.channels : [];
+      return { channels: list, warning: safeErrorMessage(data.warning || "") };
+    } catch (e) {
+      // If the bot isn't in the guild, Discord returns 403 Missing Access.
+      // Treat that as "not installed" instead of a scary error.
+      const status = e?.status;
+      const body = String(e?.body || e?.message || "");
+      const isMissingAccess =
+        status === 403 ||
+        body.includes('"code": 50001') ||
+        body.toLowerCase().includes("missing access");
 
-    if (isMissingAccess) {
-      return { channels: [], warning: "" };
+      if (isMissingAccess) {
+        return { channels: [], warning: "" };
+      }
+
+      const msg = safeErrorMessage(e?.message || "");
+
+      const shouldFallback =
+        msg.toLowerCase().includes("missing") ||
+        msg.toLowerCase().includes("guildid") ||
+        msg.toLowerCase().includes("non-json") ||
+        msg.toLowerCase().includes("html") ||
+        msg.toLowerCase().includes("route") ||
+        status === 404;
+
+      if (shouldFallback) {
+        const data2 = await fetchJson(DISCORD_CHANNELS_FALLBACK(gid), { cache: "no-store", signal });
+        const list2 = Array.isArray(data2.channels) ? data2.channels : [];
+        return { channels: list2, warning: safeErrorMessage(data2.warning || "") };
+      }
+
+      throw e;
     }
-
-    const msg = safeErrorMessage(e?.message || "");
-
-    const shouldFallback =
-      msg.toLowerCase().includes("missing") ||
-      msg.toLowerCase().includes("guildid") ||
-      msg.toLowerCase().includes("non-json") ||
-      msg.toLowerCase().includes("html") ||
-      msg.toLowerCase().includes("route") ||
-      status === 404;
-
-    if (shouldFallback) {
-      const data2 = await fetchJson(DISCORD_CHANNELS_FALLBACK(gid), { cache: "no-store", signal });
-      const list2 = Array.isArray(data2.channels) ? data2.channels : [];
-      return { channels: list2, warning: safeErrorMessage(data2.warning || "") };
-    }
-
-    throw e;
   }
-}
 
+  // On guild change: fetch channels for pickers
+  useEffect(() => {
+    if (!authed) return;
+    if (!isSnowflake(canonicalGuildId)) return;
 
-// On guild change: fetch channels for pickers
-useEffect(() => {
-  if (!authed) return;
-  if (!isSnowflake(canonicalGuildId)) return;
+    // If bot isn't installed, don't even try fetching channels (avoids 403 noise)
+    if (install.installed === false) {
+      setChannelsLoading(false);
+      setChannels([]);
+      setChannelsWarn("");
+      return;
+    }
 
-  // If bot isn't installed, don't even try fetching channels (avoids 403 noise)
-  if (install.installed === false) {
-    setChannelsLoading(false);
+    if (channelsAbortRef.current) channelsAbortRef.current.abort();
+    const ac = new AbortController();
+    channelsAbortRef.current = ac;
+
+    setChannelsLoading(true);
     setChannels([]);
     setChannelsWarn("");
-    return;
-  }
 
-  if (channelsAbortRef.current) channelsAbortRef.current.abort();
-  const ac = new AbortController();
-  channelsAbortRef.current = ac;
+    (async () => {
+      try {
+        const { channels: list, warning } = await fetchChannelsForGuild(canonicalGuildId, ac.signal);
+        setChannels(list);
+        setChannelsWarn(warning && warning !== "Missing/invalid guildId." ? warning : "");
+      } catch (e) {
+        if (e?.name === "AbortError") return;
+        const msg = safeErrorMessage(e?.message || "Failed to load channels.");
+        setChannelsWarn(msg === "Missing/invalid guildId." ? "" : msg);
+      } finally {
+        if (!ac.signal.aborted) setChannelsLoading(false);
+      }
+    })();
 
-  setChannelsLoading(true);
-  setChannels([]);
-  setChannelsWarn("");
+    return () => ac.abort();
+  }, [authed, canonicalGuildId, install.installed]);
 
-  (async () => {
+  async function saveSettings() {
+    if (!isSnowflake(canonicalGuildId) || !settings) return;
+
+    // ✅ Ensure outgoing payload includes merged defaults (never overwrite explicit false)
+    const defMods = buildDefaultModulesFromTree(MODULE_TREE);
+    const outgoing = {
+      ...settings,
+      guildId: canonicalGuildId,
+      modules: mergeModuleDefaults(settings?.modules, defMods),
+    };
+
+    setSettingsLoading(true);
     try {
-      const { channels: list, warning } = await fetchChannelsForGuild(canonicalGuildId, ac.signal);
-      setChannels(list);
-      setChannelsWarn(warning && warning !== "Missing/invalid guildId." ? warning : "");
+      const data = await fetchJson(SETTINGS_ENDPOINT(canonicalGuildId), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ settings: outgoing }),
+      });
+
+      // ✅ Re-merge after save too (keeps UI consistent even if DB doc is sparse)
+      const mergedModules = mergeModuleDefaults(data?.settings?.modules, defMods);
+
+      setSettings({
+        ...data.settings,
+        guildId: canonicalGuildId,
+        modules: mergedModules,
+      });
+
+      setDirty(false);
+      showToast("Settings sealed. ✅", "playful");
     } catch (e) {
-      if (e?.name === "AbortError") return;
-      const msg = safeErrorMessage(e?.message || "Failed to load channels.");
-      setChannelsWarn(msg === "Missing/invalid guildId." ? "" : msg);
+      showToast(safeErrorMessage(e?.message || "Save failed."), "omen");
     } finally {
-      if (!ac.signal.aborted) setChannelsLoading(false);
+      setSettingsLoading(false);
     }
-  })();
-
-  return () => ac.abort();
-}, [authed, canonicalGuildId, install.installed]);
-
-
-async function saveSettings() {
-  if (!isSnowflake(canonicalGuildId) || !settings) return;
-
-  setSettingsLoading(true);
-  try {
-    const data = await fetchJson(SETTINGS_ENDPOINT(canonicalGuildId), {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      // IMPORTANT: wrap it
-      body: JSON.stringify({ settings }),
-    });
-
-    setSettings(data.settings);
-    setDirty(false);
-    showToast("Settings sealed. ✅", "playful");
-  } catch (e) {
-    showToast(safeErrorMessage(e?.message || "Save failed."), "omen");
-  } finally {
-    setSettingsLoading(false);
   }
-}
-
 
   const gateInstalled = install.installed === true;
 
@@ -850,9 +900,12 @@ async function saveSettings() {
   function setModuleEnabled(categoryKey, enabled) {
     setSettings((prev) => {
       const next = deepClone(prev);
-      next.modules ||= {};
-      next.modules[categoryKey] ||= { enabled: false, subs: {} };
+      const defMods = buildDefaultModulesFromTree(MODULE_TREE);
+
+      next.modules = mergeModuleDefaults(next.modules, defMods);
+      next.modules[categoryKey] ||= { enabled: true, subs: {} };
       next.modules[categoryKey].enabled = !!enabled;
+
       return next;
     });
     setDirty(true);
@@ -861,10 +914,13 @@ async function saveSettings() {
   function setSubEnabled(categoryKey, subKey, enabled) {
     setSettings((prev) => {
       const next = deepClone(prev);
-      next.modules ||= {};
+      const defMods = buildDefaultModulesFromTree(MODULE_TREE);
+
+      next.modules = mergeModuleDefaults(next.modules, defMods);
       next.modules[categoryKey] ||= { enabled: true, subs: {} };
       next.modules[categoryKey].subs ||= {};
       next.modules[categoryKey].subs[subKey] = !!enabled;
+
       return next;
     });
     setDirty(true);
@@ -1188,7 +1244,10 @@ async function saveSettings() {
                         <div className="mt-4 space-y-2">
                           {MODULE_TREE.map((cat) => {
                             const active = cat.key === moduleCategory;
-                            const enabled = !!settings.modules?.[cat.key]?.enabled;
+
+                            // ✅ FAIL-OPEN UI: undefined => ON, explicit false => OFF
+                            const enabled = settings?.modules?.[cat.key]?.enabled !== false;
+
                             return (
                               <button
                                 key={cat.key}
@@ -1241,9 +1300,11 @@ async function saveSettings() {
 
                           <label className="inline-flex items-center gap-2">
                             <span className="text-[0.72rem] text-[var(--text-muted)]">Category</span>
+
+                            {/* ✅ FAIL-OPEN UI: undefined => ON */}
                             <input
                               type="checkbox"
-                              checked={!!settings.modules?.[activeCategory.key]?.enabled}
+                              checked={settings?.modules?.[activeCategory.key]?.enabled !== false}
                               onChange={(e) => {
                                 setModuleEnabled(activeCategory.key, e.target.checked);
                                 woc?.setMood?.(e.target.checked ? "story" : "omen");
@@ -1269,8 +1330,10 @@ async function saveSettings() {
 
                         <div className="mt-4 grid gap-4 sm:grid-cols-2">
                           {filteredSubs.map((s) => {
-                            const catEnabled = !!settings.modules?.[activeCategory.key]?.enabled;
-                            const subEnabled = settings.modules?.[activeCategory.key]?.subs?.[s.key] ?? true;
+                            // ✅ FAIL-OPEN UI: undefined => ON
+                            const catEnabled = settings?.modules?.[activeCategory.key]?.enabled !== false;
+                            const subEnabled =
+                              settings?.modules?.[activeCategory.key]?.subs?.[s.key] !== false;
 
                             return (
                               <div key={s.key} className="woc-card p-4 flex flex-col justify-between">
