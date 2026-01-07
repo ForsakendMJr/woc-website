@@ -8,7 +8,6 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const session = await getServerSession(authOptions);
 
-  // Just a small helper endpoint, if you still want it:
   return NextResponse.json(
     {
       ok: !!session,
