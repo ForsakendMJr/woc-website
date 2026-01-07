@@ -785,26 +785,28 @@ useEffect(() => {
 }, [authed, canonicalGuildId, install.installed]);
 
 
-  async function saveSettings() {
-    if (!isSnowflake(canonicalGuildId) || !settings) return;
+async function saveSettings() {
+  if (!isSnowflake(canonicalGuildId) || !settings) return;
 
-    setSettingsLoading(true);
-    try {
-      const data = await fetchJson(SETTINGS_ENDPOINT(canonicalGuildId), {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(settings),
-      });
+  setSettingsLoading(true);
+  try {
+    const data = await fetchJson(SETTINGS_ENDPOINT(canonicalGuildId), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      // IMPORTANT: wrap it
+      body: JSON.stringify({ settings }),
+    });
 
-      setSettings(data.settings);
-      setDirty(false);
-      showToast("Settings sealed. ✅", "playful");
-    } catch (e) {
-      showToast(safeErrorMessage(e?.message || "Save failed."), "omen");
-    } finally {
-      setSettingsLoading(false);
-    }
+    setSettings(data.settings);
+    setDirty(false);
+    showToast("Settings sealed. ✅", "playful");
+  } catch (e) {
+    showToast(safeErrorMessage(e?.message || "Save failed."), "omen");
+  } finally {
+    setSettingsLoading(false);
   }
+}
+
 
   const gateInstalled = install.installed === true;
 

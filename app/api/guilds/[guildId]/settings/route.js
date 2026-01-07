@@ -5,7 +5,7 @@ import GuildSettings from "@/app/models/GuildSettings";
 export const dynamic = "force-dynamic";
 
 function isSnowflake(x) {
-  return typeof x === "string" && /^\d{16,20}$/.test(x);
+  return typeof x === "string" && /^\d{17,20}$/.test(x);
 }
 
 function defaultSettings(guildId) {
@@ -36,43 +36,66 @@ function defaultSettings(guildId) {
   };
 }
 
-// GET = load settings
+async function getOrCreate(guildId) {
+  await dbConnect();
+  let doc = await GuildSettings.findOne({ guildId }).lean();
+  if (!doc) {
+    const created = await GuildSettings.create(defaultSettings(guildId));
+    doc = created.toObject();
+  }
+  return doc;
+}
+
 export async function GET(_req, { params }) {
   const guildId = params?.guildId ? String(params.guildId) : "";
   if (!isSnowflake(guildId)) {
-    return NextResponse.json({ ok: false, error: "Missing guildId." }, { status: 400 });
+    return NextResponse.json({ ok: false, error: "Missing/invalid guildId." }, { status: 400 });
   }
 
-  await dbConnect();
-
-  const doc = await GuildSettings.findOne({ guildId }).lean();
-  const settings = doc && doc.guildId ? doc : defaultSettings(guildId);
-
-  return NextResponse.json({ ok: true, settings }, { status: 200 });
+  try {
+    const settings = await getOrCreate(guildId);
+    return NextResponse.json({ ok: true, settings }, { status: 200 });
+  } catch (e) {
+    return NextResponse.json(
+      { ok: false, error: String(e?.message || "Failed to load settings.") },
+      { status: 500 }
+    );
+  }
 }
 
-// PUT = save settings
 export async function PUT(req, { params }) {
   const guildId = params?.guildId ? String(params.guildId) : "";
   if (!isSnowflake(guildId)) {
-    return NextResponse.json({ ok: false, error: "Missing guildId." }, { status: 400 });
+    return NextResponse.json({ ok: false, error: "Missing/invalid guildId." }, { status: 400 });
   }
 
-  const body = await req.json().catch(() => null);
-  if (!body || typeof body !== "object") {
-    return NextResponse.json({ ok: false, error: "Invalid JSON body." }, { status: 400 });
+  try {
+    const body = await req.json().catch(() => ({}));
+    const incoming = body?.settings;
+
+    if (!incoming || typeof incoming !== "object") {
+      return NextResponse.json(
+        { ok: false, error: "Body must be JSON: { settings: { ... } }" },
+        { status: 400 }
+      );
+    }
+
+    // Force correct guildId and prevent accidental cross-guild writes
+    incoming.guildId = guildId;
+
+    await dbConnect();
+
+    const updated = await GuildSettings.findOneAndUpdate(
+      { guildId },
+      { $set: incoming },
+      { new: true, upsert: true }
+    ).lean();
+
+    return NextResponse.json({ ok: true, settings: updated }, { status: 200 });
+  } catch (e) {
+    return NextResponse.json(
+      { ok: false, error: String(e?.message || "Failed to save settings.") },
+      { status: 500 }
+    );
   }
-
-  await dbConnect();
-
-  // Force guildId consistency
-  const next = { ...body, guildId };
-
-  const updated = await GuildSettings.findOneAndUpdate(
-    { guildId },
-    { $set: next },
-    { upsert: true, new: true }
-  ).lean();
-
-  return NextResponse.json({ ok: true, settings: updated }, { status: 200 });
 }
