@@ -15,7 +15,8 @@ const SETTINGS_ENDPOINT = (gid) => `/api/guilds/${encodeURIComponent(gid)}/setti
 const CHANNELS_ENDPOINT = (gid) => `/api/guilds/${encodeURIComponent(gid)}/channels`;
 
 // Fallback endpoint (some builds use this style)
-const DISCORD_CHANNELS_FALLBACK = (gid) => `/api/discord/channels?guildId=${encodeURIComponent(gid)}`;
+const DISCORD_CHANNELS_FALLBACK = (gid) =>
+  `/api/discord/channels?guildId=${encodeURIComponent(gid)}`;
 
 function safeGet(key, fallback = "") {
   try {
@@ -70,6 +71,7 @@ async function fetchJson(url, opts = {}) {
   const res = await fetch(url, opts);
   const ct = (res.headers.get("content-type") || "").toLowerCase();
 
+  // If backend crashes or route missing, Next often returns HTML.
   if (!ct.includes("application/json")) {
     const txt = await res.text().catch(() => "");
     const e = new Error(safeErrorMessage(txt || `Non-JSON response (${res.status})`));
@@ -508,15 +510,15 @@ export default function DashboardPage() {
   const [guilds, setGuilds] = useState([]);
   const [guildWarn, setGuildWarn] = useState("");
 
-  // NOTE: we store raw localStorage value but never let it drive API calls unless validated.
+  // NOTE: raw LS value but never let it drive API calls unless validated
   const [selectedGuildIdRaw, setSelectedGuildIdRaw] = useState("");
 
-  // Read LS only on client mount (avoids any weird hydration + stale issues)
+  // Read LS only on mount (client)
   useEffect(() => {
     setSelectedGuildIdRaw(safeGet(LS.selectedGuild, ""));
   }, []);
 
-  // Chosen guild must be a real snowflake AND exist in list.
+  // Chosen guild must be a real snowflake AND exist in list
   const selectedGuildId = useMemo(() => {
     const raw = String(selectedGuildIdRaw || "").trim();
     if (!guilds.length) return "";
@@ -531,7 +533,7 @@ export default function DashboardPage() {
     [guilds, selectedGuildId]
   );
 
-  // Canonical guild id used for EVERY per-guild call (prevents "Missing guildId" mismatches)
+  // Canonical guild id used for EVERY per-guild call
   const canonicalGuildId = useMemo(() => {
     const gid =
       selectedGuildId ||
@@ -543,7 +545,7 @@ export default function DashboardPage() {
 
   const [install, setInstall] = useState({
     loading: false,
-    installed: null, // true/false/null
+    installed: null,
     warning: "",
   });
 
@@ -622,7 +624,6 @@ export default function DashboardPage() {
         const warn = safeErrorMessage(data.warning || data.error || "");
         if (warn) setGuildWarn(warn);
 
-        // Once guilds arrive, force raw selection to a real id
         const raw = String(selectedGuildIdRaw || safeGet(LS.selectedGuild, "") || "").trim();
         const first = String(list[0]?.id || "");
         const validRaw = isSnowflake(raw) && list.some((g) => String(g.id) === raw);
@@ -660,7 +661,7 @@ export default function DashboardPage() {
     const ac = new AbortController();
     perGuildAbortRef.current = ac;
 
-    // install check (soft warnings)
+    // install check
     setInstall((s) => ({ ...s, loading: true, warning: "" }));
     (async () => {
       try {
@@ -668,7 +669,8 @@ export default function DashboardPage() {
           cache: "no-store",
           signal: ac.signal,
         });
-        const rawWarn = safeErrorMessage(data?.warning || "");
+
+        const rawWarn = safeErrorMessage(data?.warning || data?.error || "");
         setInstall({
           loading: false,
           installed: data?.installed ?? null,
@@ -705,20 +707,18 @@ export default function DashboardPage() {
   }, [authed, canonicalGuildId]);
 
   async function fetchChannelsForGuild(gid, signal) {
-    // Try primary route shape first: /api/guilds/:gid/channels
+    // Primary: /api/guilds/:gid/channels
     try {
       const data = await fetchJson(CHANNELS_ENDPOINT(gid), { cache: "no-store", signal });
       const list = Array.isArray(data.channels) ? data.channels : [];
-      return { channels: list, warning: safeErrorMessage(data.warning || "") };
+      const warn = safeErrorMessage(data.warning || data.error || "");
+      return { channels: list, warning: warn };
     } catch (e) {
-      const msg = safeErrorMessage(e?.message || "");
-      // If the API route is wired differently (expects query param), fallback:
-      if (msg.toLowerCase().includes("missing") || msg.toLowerCase().includes("guildid")) {
-        const data2 = await fetchJson(DISCORD_CHANNELS_FALLBACK(gid), { cache: "no-store", signal });
-        const list2 = Array.isArray(data2.channels) ? data2.channels : [];
-        return { channels: list2, warning: safeErrorMessage(data2.warning || "") };
-      }
-      throw e;
+      // Fallback: /api/discord/channels?guildId=...
+      const data2 = await fetchJson(DISCORD_CHANNELS_FALLBACK(gid), { cache: "no-store", signal });
+      const list2 = Array.isArray(data2.channels) ? data2.channels : [];
+      const warn2 = safeErrorMessage(data2.warning || data2.error || "");
+      return { channels: list2, warning: warn2 };
     }
   }
 
@@ -842,9 +842,22 @@ export default function DashboardPage() {
     return list.filter((c) => {
       const t = String(c?.type || "").toLowerCase();
       const label = String(c?.typeLabel || "").toLowerCase();
-      return t.includes("text") || label.includes("text") || t.includes("announcement") || label.includes("announce");
+      return (
+        t.includes("text") ||
+        label.includes("text") ||
+        t.includes("announcement") ||
+        label.includes("announce")
+      );
     });
   }, [channels]);
+
+  // Handy debug URLs (no guessing, show the actual JSON responses)
+  const debugStatusUrl = isSnowflake(canonicalGuildId)
+    ? `${STATUS_ENDPOINT(canonicalGuildId)}`
+    : "";
+  const debugChannelsUrl = isSnowflake(canonicalGuildId)
+    ? `${CHANNELS_ENDPOINT(canonicalGuildId)}`
+    : "";
 
   return (
     <div className="max-w-7xl mx-auto px-6 lg:px-10 py-12">
@@ -948,6 +961,18 @@ export default function DashboardPage() {
                   />
                 </div>
 
+                {/* Debug quick links */}
+                {isSnowflake(canonicalGuildId) ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <a className="woc-btn-ghost text-xs" href={debugStatusUrl} target="_blank" rel="noreferrer">
+                      Open status JSON
+                    </a>
+                    <a className="woc-btn-ghost text-xs" href={debugChannelsUrl} target="_blank" rel="noreferrer">
+                      Open channels JSON
+                    </a>
+                  </div>
+                ) : null}
+
                 {install.warning ? (
                   <div className="mt-4 text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
                     <div className="font-semibold">Gate notice</div>
@@ -1030,7 +1055,6 @@ export default function DashboardPage() {
                       : "Gate closed. Invite WoC to enable editing."}
                   </div>
 
-                  {/* tiny debug strip */}
                   <div className="mt-2 text-[0.7rem] text-[var(--text-muted)]">
                     Selected guildId:{" "}
                     <span className={cx("font-semibold", isSnowflake(canonicalGuildId) ? "text-emerald-200" : "text-amber-200")}>
@@ -1082,7 +1106,9 @@ export default function DashboardPage() {
                     <div className="grid gap-4 lg:grid-cols-3">
                       <div className="woc-card p-4 lg:col-span-2">
                         <div className="font-semibold">Server snapshot</div>
-                        <div className="text-xs text-[var(--text-muted)] mt-1">Live settings in Mongo (once your API is happy).</div>
+                        <div className="text-xs text-[var(--text-muted)] mt-1">
+                          Live settings in Mongo (once your API is happy).
+                        </div>
 
                         <div className="mt-4 grid grid-cols-2 gap-3">
                           <div className="woc-card p-3">
@@ -1110,7 +1136,8 @@ export default function DashboardPage() {
                           “A server is a living map. Modules are the weather. Choose wisely.”
                         </div>
                         <div className="mt-3 text-[0.72rem] text-[var(--text-muted)]">
-                          If <b>/settings</b> is returning 400 “Missing guildId”, that is server-route-side, not the dashboard.
+                          If status says installed=false but the bot is actually in the server, your Vercel{" "}
+                          <b>DISCORD_BOT_TOKEN</b> is almost certainly pointing at a different bot.
                         </div>
                       </div>
                     </div>
