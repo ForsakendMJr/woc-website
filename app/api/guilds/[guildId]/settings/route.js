@@ -5,7 +5,29 @@ import GuildSettings from "@/app/models/GuildSettings";
 export const dynamic = "force-dynamic";
 
 function isSnowflake(x) {
-  return typeof x === "string" && /^\d{17,20}$/.test(x);
+  const s = String(x || "").trim();
+  return /^\d{17,20}$/.test(s);
+}
+
+function extractGuildId(req, params) {
+  // 1) Normal Next App Router param
+  const p = params?.guildId ? String(params.guildId).trim() : "";
+  if (isSnowflake(p)) return p;
+
+  // 2) Query param fallback (if you ever hit it like ?guildId=)
+  try {
+    const url = new URL(req.url);
+    const q = (url.searchParams.get("guildId") || "").trim();
+    if (isSnowflake(q)) return q;
+
+    // 3) Path parsing fallback: /api/guilds/<ID>/settings
+    const parts = url.pathname.split("/").filter(Boolean);
+    const i = parts.indexOf("guilds");
+    const fromPath = i !== -1 ? (parts[i + 1] || "").trim() : "";
+    if (isSnowflake(fromPath)) return fromPath;
+  } catch {}
+
+  return "";
 }
 
 function defaultSettings(guildId) {
@@ -36,37 +58,48 @@ function defaultSettings(guildId) {
   };
 }
 
-async function getOrCreate(guildId) {
-  await dbConnect();
-  let doc = await GuildSettings.findOne({ guildId }).lean();
-  if (!doc) {
-    const created = await GuildSettings.create(defaultSettings(guildId));
-    doc = created.toObject();
-  }
-  return doc;
-}
+export async function GET(req, ctx) {
+  const guildId = extractGuildId(req, ctx?.params);
 
-export async function GET(_req, { params }) {
-  const guildId = params?.guildId ? String(params.guildId) : "";
+  // IMPORTANT: return 200 with ok:true + warning (matches your status/channels style)
   if (!isSnowflake(guildId)) {
-    return NextResponse.json({ ok: false, error: "Missing/invalid guildId." }, { status: 400 });
+    return NextResponse.json(
+      { ok: true, settings: null, guildId: "", warning: "Missing/invalid guildId." },
+      { status: 200 }
+    );
   }
 
   try {
-    const settings = await getOrCreate(guildId);
-    return NextResponse.json({ ok: true, settings }, { status: 200 });
+    await dbConnect();
+
+    let doc = await GuildSettings.findOne({ guildId }).lean();
+    if (!doc) {
+      const created = await GuildSettings.create(defaultSettings(guildId));
+      doc = created.toObject();
+    }
+
+    return NextResponse.json({ ok: true, settings: doc, guildId, warning: "" }, { status: 200 });
   } catch (e) {
     return NextResponse.json(
-      { ok: false, error: String(e?.message || "Failed to load settings.") },
-      { status: 500 }
+      {
+        ok: true,
+        settings: defaultSettings(guildId),
+        guildId,
+        warning: String(e?.message || "Failed to load settings."),
+      },
+      { status: 200 }
     );
   }
 }
 
-export async function PUT(req, { params }) {
-  const guildId = params?.guildId ? String(params.guildId) : "";
+export async function PUT(req, ctx) {
+  const guildId = extractGuildId(req, ctx?.params);
+
   if (!isSnowflake(guildId)) {
-    return NextResponse.json({ ok: false, error: "Missing/invalid guildId." }, { status: 400 });
+    return NextResponse.json(
+      { ok: true, settings: null, guildId: "", warning: "Missing/invalid guildId." },
+      { status: 200 }
+    );
   }
 
   try {
@@ -75,13 +108,12 @@ export async function PUT(req, { params }) {
 
     if (!incoming || typeof incoming !== "object") {
       return NextResponse.json(
-        { ok: false, error: "Body must be JSON: { settings: { ... } }" },
-        { status: 400 }
+        { ok: true, settings: null, guildId, warning: "Body must be JSON: { settings: { ... } }" },
+        { status: 200 }
       );
     }
 
-    // Force correct guildId and prevent accidental cross-guild writes
-    incoming.guildId = guildId;
+    incoming.guildId = guildId; // enforce correct guild
 
     await dbConnect();
 
@@ -91,11 +123,16 @@ export async function PUT(req, { params }) {
       { new: true, upsert: true }
     ).lean();
 
-    return NextResponse.json({ ok: true, settings: updated }, { status: 200 });
+    return NextResponse.json({ ok: true, settings: updated, guildId, warning: "" }, { status: 200 });
   } catch (e) {
     return NextResponse.json(
-      { ok: false, error: String(e?.message || "Failed to save settings.") },
-      { status: 500 }
+      {
+        ok: true,
+        settings: null,
+        guildId,
+        warning: String(e?.message || "Failed to save settings."),
+      },
+      { status: 200 }
     );
   }
 }
