@@ -610,9 +610,30 @@ export default function DashboardPage() {
   const [moduleCategory, setModuleCategory] = useState("moderation");
   const [moduleSearch, setModuleSearch] = useState("");
 
-  const clientId = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || "";
-  const inviteLinkForGuild = (gid) =>
-    `https://discord.com/oauth2/authorize?client_id=${clientId}&scope=bot%20applications.commands&permissions=8&guild_id=${gid}&disable_guild_select=true`;
+const clientIdRaw = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || "";
+const clientId = String(clientIdRaw || "").trim();
+
+// Build a safe Discord bot invite URL.
+// - If clientId invalid => return ""
+// - If guildId invalid => return a normal invite (user picks server)
+// - If guildId valid => lock it to that server
+function buildBotInviteUrl(gid) {
+  if (!isSnowflake(clientId)) return "";
+
+  const params = new URLSearchParams();
+  params.set("client_id", clientId);
+  params.set("scope", "bot applications.commands");
+  params.set("permissions", "8"); // admin, keep as-is
+
+  const guildId = String(gid || "").trim();
+  if (isSnowflake(guildId)) {
+    params.set("guild_id", guildId);
+    params.set("disable_guild_select", "true");
+  }
+
+  return `https://discord.com/oauth2/authorize?${params.toString()}`;
+}
+
 
   function showToast(msg, mood = "playful") {
     setToast(msg);
