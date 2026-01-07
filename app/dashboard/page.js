@@ -574,11 +574,7 @@ export default function DashboardPage() {
 
   // Canonical guild id used for EVERY per-guild call
   const canonicalGuildId = useMemo(() => {
-    const gid =
-      selectedGuildId ||
-      selectedGuild?.id ||
-      selectedGuild?.guildId ||
-      safeGet(LS.selectedGuild, "");
+    const gid = selectedGuildId || selectedGuild?.id || selectedGuild?.guildId || safeGet(LS.selectedGuild, "");
     return isSnowflake(gid) ? String(gid) : "";
   }, [selectedGuildId, selectedGuild]);
 
@@ -610,30 +606,29 @@ export default function DashboardPage() {
   const [moduleCategory, setModuleCategory] = useState("moderation");
   const [moduleSearch, setModuleSearch] = useState("");
 
-const clientIdRaw = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || "";
-const clientId = String(clientIdRaw || "").trim();
+  const clientIdRaw = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || "";
+  const clientId = String(clientIdRaw || "").trim();
 
-// Build a safe Discord bot invite URL.
-// - If clientId invalid => return ""
-// - If guildId invalid => return a normal invite (user picks server)
-// - If guildId valid => lock it to that server
-function buildBotInviteUrl(gid) {
-  if (!isSnowflake(clientId)) return "";
+  // Build a safe Discord bot invite URL.
+  // - If clientId invalid => return ""
+  // - If guildId invalid => return a normal invite (user picks server)
+  // - If guildId valid => lock it to that server
+  function buildBotInviteUrl(gid) {
+    if (!isSnowflake(clientId)) return "";
 
-  const params = new URLSearchParams();
-  params.set("client_id", clientId);
-  params.set("scope", "bot applications.commands");
-  params.set("permissions", "8"); // admin, keep as-is
+    const params = new URLSearchParams();
+    params.set("client_id", clientId);
+    params.set("scope", "bot applications.commands");
+    params.set("permissions", "8"); // admin, keep as-is
 
-  const guildId = String(gid || "").trim();
-  if (isSnowflake(guildId)) {
-    params.set("guild_id", guildId);
-    params.set("disable_guild_select", "true");
+    const guildId = String(gid || "").trim();
+    if (isSnowflake(guildId)) {
+      params.set("guild_id", guildId);
+      params.set("disable_guild_select", "true");
+    }
+
+    return `https://discord.com/oauth2/authorize?${params.toString()}`;
   }
-
-  return `https://discord.com/oauth2/authorize?${params.toString()}`;
-}
-
 
   function showToast(msg, mood = "playful") {
     setToast(msg);
@@ -1001,12 +996,22 @@ function buildBotInviteUrl(gid) {
               <SectionTitle title="Step 1: Invite WoC" subtitle="Invite first so the dashboard can control something real." />
               <a
                 className="mt-4 inline-flex w-full justify-center items-center gap-2 woc-btn-primary"
-                href="https://discord.com/oauth2/authorize"
+                href={buildBotInviteUrl("") || "https://discord.com/oauth2/authorize"}
                 target="_blank"
                 rel="noreferrer"
+                title={
+                  isSnowflake(clientId)
+                    ? "Invite WoC to a server"
+                    : "Missing/invalid NEXT_PUBLIC_DISCORD_CLIENT_ID"
+                }
               >
                 Add WoC to Discord <span className="text-base">➕</span>
               </a>
+              {!isSnowflake(clientId) ? (
+                <div className="mt-2 text-[0.72rem] text-rose-200/90">
+                  Missing/invalid NEXT_PUBLIC_DISCORD_CLIENT_ID. Add it to env and redeploy.
+                </div>
+              ) : null}
             </div>
 
             <div className="woc-card p-5">
@@ -1101,20 +1106,28 @@ function buildBotInviteUrl(gid) {
                     <a
                       className={cx(
                         "mt-3 inline-flex items-center gap-2 woc-btn-primary",
-                        !clientId || !isSnowflake(canonicalGuildId) ? "opacity-60 cursor-not-allowed" : ""
+                        !isSnowflake(clientId) || !isSnowflake(canonicalGuildId) ? "opacity-60 cursor-not-allowed" : ""
                       )}
-                      href={clientId && isSnowflake(canonicalGuildId) ? inviteLinkForGuild(canonicalGuildId) : undefined}
+                      href={
+                        isSnowflake(clientId) && isSnowflake(canonicalGuildId)
+                          ? buildBotInviteUrl(canonicalGuildId)
+                          : undefined
+                      }
                       target="_blank"
                       rel="noreferrer"
                       onClick={() => woc?.setMood?.("battle")}
-                      title={clientId ? "Invite WoC to this server" : "Set NEXT_PUBLIC_DISCORD_CLIENT_ID in env"}
+                      title={
+                        isSnowflake(clientId)
+                          ? "Invite WoC to this server"
+                          : "Set NEXT_PUBLIC_DISCORD_CLIENT_ID in env"
+                      }
                     >
                       Invite WoC to this server <span>➕</span>
                     </a>
 
-                    {!clientId ? (
+                    {!isSnowflake(clientId) ? (
                       <div className="mt-2 text-[0.72rem] text-rose-200/90">
-                        Missing NEXT_PUBLIC_DISCORD_CLIENT_ID. Add it to Vercel env and redeploy.
+                        Missing/invalid NEXT_PUBLIC_DISCORD_CLIENT_ID. Add it to env and redeploy.
                       </div>
                     ) : (
                       <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
@@ -1161,7 +1174,12 @@ function buildBotInviteUrl(gid) {
 
                   <div className="mt-2 text-[0.7rem] text-[var(--text-muted)]">
                     Selected guildId:{" "}
-                    <span className={cx("font-semibold", isSnowflake(canonicalGuildId) ? "text-emerald-200" : "text-amber-200")}>
+                    <span
+                      className={cx(
+                        "font-semibold",
+                        isSnowflake(canonicalGuildId) ? "text-emerald-200" : "text-amber-200"
+                      )}
+                    >
                       {canonicalGuildId || "(none)"}
                     </span>
                   </div>
