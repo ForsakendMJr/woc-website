@@ -1,80 +1,52 @@
-// app/components/Navbar.jsx
 "use client";
 
 import Link from "next/link";
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
-import { useSession, signOut } from "next-auth/react";
 import ThemeToggle from "./ThemeToggle";
+import { useSession, signIn, signOut } from "next-auth/react";
 
 export default function Navbar() {
   const { data: session, status } = useSession();
-  const authed = status === "authenticated";
-
-  const [open, setOpen] = useState(false);
-  const menuRef = useRef(null);
-
-  // close dropdown when clicking outside
-  useEffect(() => {
-    function onDown(e) {
-      if (!menuRef.current) return;
-      if (!menuRef.current.contains(e.target)) setOpen(false);
-    }
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, []);
 
   const userName =
-    session?.user?.name || session?.user?.email?.split("@")?.[0] || "Adventurer";
+    session?.user?.name ||
+    session?.user?.email ||
+    "Signed in";
 
-  // Robust: only use external URL if it looks valid, otherwise fallback
-  const userImage =
-    session?.user?.image && session.user.image.startsWith("http")
-      ? session.user.image
-      : "/woc-avatar.png";
+  const userImage = session?.user?.image || null;
 
   return (
     <header className="sticky top-0 z-40 border-b border-[var(--border-subtle)]/40 bg-[color-mix(in_oklab,var(--bg-root)_80%,transparent)] backdrop-blur-xl">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
-        {/* Left: WoC avatar + title */}
-        <Link href="/" className="flex items-center gap-3 min-w-[200px]">
-          {/* WoC avatar logo */}
+        {/* Left: Bot Avatar + Name */}
+        <Link href="/" className="flex items-center gap-3 min-w-[240px]">
           <div
             className="
-              woc-avatar
               relative h-11 w-11 rounded-full overflow-hidden
               shadow-lg border border-[var(--border-subtle)]
               bg-[var(--bg-card)]
-              flex-shrink-0
             "
+            aria-label="WoC"
             title="World of Communities"
           >
             <Image
               src="/woc-avatar.png"
               alt="WoC avatar"
               fill
-              sizes="64px"
+              sizes="44px"
               priority
-              quality={100}
-              className="object-cover pointer-events-none"
-              // For wide art (960x540): use object-position + zoom + tiny nudge
-
-              // Wide art → increase scale
-
-              // Face too left → increase translate-x
-
-              // Face too high → increase translate-y
-              style={{
-                objectPosition: "50% 50%",
-                transform: "scale(1) translate(8px, 6px)",
-              }}
+              className="
+                object-cover
+                scale-[1.75]
+                translate-x-[6px]
+                translate-y-[6px]
+                pointer-events-none
+              "
             />
-
-            {/* Glow ring */}
             <span
               className="
-                pointer-events-none absolute inset-0 rounded-full 
-                ring-2 ring-[var(--accent)] ring-offset-[3px] 
+                pointer-events-none absolute inset-0 rounded-full
+                ring-2 ring-[var(--accent)] ring-offset-[3px]
                 ring-offset-[var(--bg-root)]
                 opacity-90
               "
@@ -85,7 +57,7 @@ export default function Navbar() {
             <div className="text-sm font-semibold tracking-wide">
               World of Communities
             </div>
-            {/* subtitle removed */}
+            {/* Removed subtitle: "Discord adventure engine" */}
           </div>
         </Link>
 
@@ -121,103 +93,56 @@ export default function Navbar() {
 
           <Link
             href="/dashboard"
-            className="inline-flex items-center gap-2 text-xs px-3 py-1 rounded-full
-                       border border-[var(--border-subtle)]/70
-                       bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
-                       text-[var(--text-main)]
-                       hover:-translate-y-[1px] transition-transform"
+            className="inline-flex items-center gap-2 text-xs px-3 py-1 rounded-full border border-[var(--border-subtle)]/60 bg-[color-mix(in_oklab,var(--bg-card)_75%,transparent)] text-[var(--text-main)] hover:-translate-y-[1px] transition-transform"
           >
             <span>Dashboard</span>
-            <span className="text-[0.75rem] opacity-80">↗</span>
+            <span className="opacity-70">↗</span>
           </Link>
         </nav>
 
-        {/* Right: theme + actions */}
+        {/* Right: theme + user + CTA */}
         <div className="flex items-center gap-3">
           <ThemeToggle />
 
-          {/* Vote pill */}
-          <Link
-            href="/vote"
-            className="hidden sm:inline-flex items-center gap-1 text-xs px-3 py-1 rounded-full
-                       border border-[var(--border-subtle)]/70
-                       bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
-                       text-[var(--text-main)]
-                       hover:-translate-y-[1px] transition-transform"
-          >
-            <span>Vote</span>
-            <span>🗳️</span>
-          </Link>
-
-          {/* If authed: show account pill + dropdown */}
-          {authed && (
-            <div className="relative" ref={menuRef}>
-              <button
-                type="button"
-                onClick={() => setOpen((v) => !v)}
-                className="
-                  inline-flex items-center gap-2
-                  text-xs sm:text-sm
-                  px-3 py-1.5 rounded-full
-                  border border-[var(--border-subtle)]/70
-                  bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
-                  hover:-translate-y-[1px] transition-transform
-                "
-                aria-haspopup="menu"
-                aria-expanded={open}
-              >
-                {/* Use <img> for Discord avatars = no broken Next/Image domains */}
-                <span className="relative h-6 w-6 rounded-full overflow-hidden border border-[var(--border-subtle)] bg-[var(--bg-card)]">
-                  <img
+          {/* User chip */}
+          {status === "authenticated" ? (
+            <div className="flex items-center gap-2">
+              <div className="relative h-8 w-8 rounded-full overflow-hidden border border-[var(--border-subtle)] bg-[var(--bg-card)]">
+                {userImage ? (
+                  <Image
                     src={userImage}
-                    alt="Your avatar"
-                    className="h-full w-full object-cover"
-                    onError={(e) => {
-                      // hard fallback if the external URL fails
-                      e.currentTarget.src = "/woc-avatar.png";
-                    }}
+                    alt={userName}
+                    fill
+                    sizes="32px"
+                    className="object-cover"
                   />
-                </span>
+                ) : (
+                  <div className="h-full w-full flex items-center justify-center text-[0.7rem] font-semibold text-[var(--text-main)]">
+                    {String(userName).slice(0, 1).toUpperCase()}
+                  </div>
+                )}
+              </div>
 
-                <span className="max-w-[110px] truncate">{userName}</span>
-                <span className="opacity-70">▾</span>
+              <button
+                onClick={() => signOut()}
+                className="hidden sm:inline-flex items-center gap-2 text-xs px-3 py-1 rounded-full border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] text-[var(--text-main)] hover:-translate-y-[1px] transition-transform"
+                title={userName}
+              >
+                <span className="max-w-[140px] truncate">{userName}</span>
+                <span className="opacity-70">⏻</span>
               </button>
-
-              {open && (
-                <div
-                  className="
-                    absolute right-0 mt-2 w-44
-                    rounded-xl border border-[var(--border-subtle)]/70
-                    bg-[color-mix(in_oklab,var(--bg-root)_86%,transparent)]
-                    backdrop-blur-xl
-                    shadow-2xl
-                    overflow-hidden
-                  "
-                  role="menu"
-                >
-                  <Link
-                    href="/dashboard"
-                    onClick={() => setOpen(false)}
-                    className="block px-3 py-2 text-sm hover:bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]"
-                    role="menuitem"
-                  >
-                    Dashboard
-                  </Link>
-
-                  <button
-                    type="button"
-                    onClick={() => signOut({ callbackUrl: "/" })}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]"
-                    role="menuitem"
-                  >
-                    Sign out
-                  </button>
-                </div>
-              )}
             </div>
+          ) : (
+            <button
+              onClick={() => signIn("discord")}
+              className="inline-flex items-center gap-2 text-xs px-3 py-1 rounded-full border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] text-[var(--text-main)] hover:-translate-y-[1px] transition-transform"
+            >
+              <span>Sign in</span>
+              <span>🔑</span>
+            </button>
           )}
 
-          {/* Invite CTA */}
+          {/* CTA */}
           <a
             href="https://discord.com/oauth2/authorize"
             target="_blank"
