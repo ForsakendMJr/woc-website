@@ -458,12 +458,13 @@ const MODULE_TREE = [
   },
 ];
 
+/** Build defaults: everything ON by default */
 function buildDefaultModulesFromTree(tree) {
-  return tree.reduce((acc, cat) => {
+  return (tree || []).reduce((acc, cat) => {
     acc[cat.key] = {
-      enabled: true, // default ON
+      enabled: true,
       subs: (cat.subs || []).reduce((m, s) => {
-        m[s.key] = true; // default ON
+        m[s.key] = true;
         return m;
       }, {}),
     };
@@ -480,7 +481,7 @@ function buildDefaultModulesFromTree(tree) {
 function mergeModuleDefaults(existingModules, defaultModules) {
   const out = existingModules && typeof existingModules === "object" ? deepClone(existingModules) : {};
 
-  for (const [catKey, defCat] of Object.entries(defaultModules)) {
+  for (const [catKey, defCat] of Object.entries(defaultModules || {})) {
     if (!out[catKey] || typeof out[catKey] !== "object") out[catKey] = {};
     if (typeof out[catKey].enabled !== "boolean") out[catKey].enabled = defCat.enabled;
 
@@ -493,9 +494,19 @@ function mergeModuleDefaults(existingModules, defaultModules) {
   return out;
 }
 
-function ensureDefaultSettings(guildId) {
-  const defaults = buildDefaultModulesFromTree(MODULE_TREE);
+/** UI helper: treat missing module keys as ENABLED by default */
+function isModuleEnabled(modules, catKey) {
+  const v = modules?.[catKey]?.enabled;
+  return typeof v === "boolean" ? v : true;
+}
+/** UI helper: treat missing sub keys as ENABLED by default */
+function isSubEnabled(modules, catKey, subKey) {
+  const v = modules?.[catKey]?.subs?.[subKey];
+  return typeof v === "boolean" ? v : true;
+}
 
+function ensureDefaultSettings(guildId) {
+  const defaultModules = buildDefaultModulesFromTree(MODULE_TREE);
   return {
     guildId,
     prefix: "!",
@@ -518,8 +529,7 @@ function ensureDefaultSettings(guildId) {
       message: "Welcome {user} to **{server}**! ✨",
       autoRoleId: "",
     },
-    // default modules ON (matches bot fail-open logic)
-    modules: defaults,
+    modules: defaultModules, // ✅ default everything ON
     personality: { mood: "story", sass: 35, narration: true },
   };
 }
@@ -726,15 +736,14 @@ export default function DashboardPage() {
           signal: ac.signal,
         });
 
-        // ✅ Merge module defaults so UI matches bot fail-open
-        const defMods = buildDefaultModulesFromTree(MODULE_TREE);
-        const mergedModules = mergeModuleDefaults(data?.settings?.modules, defMods);
+        const incoming = data?.settings && typeof data.settings === "object" ? data.settings : null;
+        const base = incoming || ensureDefaultSettings(canonicalGuildId);
 
-        setSettings({
-          ...data.settings,
-          guildId: canonicalGuildId,
-          modules: mergedModules,
-        });
+        // ✅ Ensure modules defaults exist, without overwriting explicit false
+        const defaults = buildDefaultModulesFromTree(MODULE_TREE);
+        const mergedModules = mergeModuleDefaults(base.modules, defaults);
+
+        setSettings({ ...base, guildId: canonicalGuildId, modules: mergedModules });
       } catch (e) {
         if (e?.name === "AbortError") return;
         setSettings(ensureDefaultSettings(canonicalGuildId));
@@ -824,31 +833,24 @@ export default function DashboardPage() {
   async function saveSettings() {
     if (!isSnowflake(canonicalGuildId) || !settings) return;
 
-    // ✅ Ensure outgoing payload includes merged defaults (never overwrite explicit false)
-    const defMods = buildDefaultModulesFromTree(MODULE_TREE);
-    const outgoing = {
-      ...settings,
-      guildId: canonicalGuildId,
-      modules: mergeModuleDefaults(settings?.modules, defMods),
-    };
+    // ✅ Before saving, re-merge defaults so "missing keys" never become "Off" in UI
+    const defaults = buildDefaultModulesFromTree(MODULE_TREE);
+    const safeSettings = deepClone(settings);
+    safeSettings.guildId = canonicalGuildId;
+    safeSettings.modules = mergeModuleDefaults(safeSettings.modules, defaults);
 
     setSettingsLoading(true);
     try {
       const data = await fetchJson(SETTINGS_ENDPOINT(canonicalGuildId), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings: outgoing }),
+        body: JSON.stringify({ settings: safeSettings }),
       });
 
-      // ✅ Re-merge after save too (keeps UI consistent even if DB doc is sparse)
-      const mergedModules = mergeModuleDefaults(data?.settings?.modules, defMods);
+      const incoming = data?.settings && typeof data.settings === "object" ? data.settings : safeSettings;
+      const mergedModules = mergeModuleDefaults(incoming.modules, defaults);
 
-      setSettings({
-        ...data.settings,
-        guildId: canonicalGuildId,
-        modules: mergedModules,
-      });
-
+      setSettings({ ...incoming, guildId: canonicalGuildId, modules: mergedModules });
       setDirty(false);
       showToast("Settings sealed. ✅", "playful");
     } catch (e) {
@@ -900,12 +902,9 @@ export default function DashboardPage() {
   function setModuleEnabled(categoryKey, enabled) {
     setSettings((prev) => {
       const next = deepClone(prev);
-      const defMods = buildDefaultModulesFromTree(MODULE_TREE);
-
-      next.modules = mergeModuleDefaults(next.modules, defMods);
+      next.modules ||= {};
       next.modules[categoryKey] ||= { enabled: true, subs: {} };
       next.modules[categoryKey].enabled = !!enabled;
-
       return next;
     });
     setDirty(true);
@@ -914,13 +913,10 @@ export default function DashboardPage() {
   function setSubEnabled(categoryKey, subKey, enabled) {
     setSettings((prev) => {
       const next = deepClone(prev);
-      const defMods = buildDefaultModulesFromTree(MODULE_TREE);
-
-      next.modules = mergeModuleDefaults(next.modules, defMods);
+      next.modules ||= {};
       next.modules[categoryKey] ||= { enabled: true, subs: {} };
       next.modules[categoryKey].subs ||= {};
       next.modules[categoryKey].subs[subKey] = !!enabled;
-
       return next;
     });
     setDirty(true);
@@ -942,13 +938,9 @@ export default function DashboardPage() {
     });
   }, [channels]);
 
-  // Handy debug URLs (no guessing, show the actual JSON responses)
-  const debugStatusUrl = isSnowflake(canonicalGuildId)
-    ? `${STATUS_ENDPOINT(canonicalGuildId)}`
-    : "";
-  const debugChannelsUrl = isSnowflake(canonicalGuildId)
-    ? `${CHANNELS_ENDPOINT(canonicalGuildId)}`
-    : "";
+  // Debug URLs (dev-only buttons)
+  const debugStatusUrl = isSnowflake(canonicalGuildId) ? `${STATUS_ENDPOINT(canonicalGuildId)}` : "";
+  const debugChannelsUrl = isSnowflake(canonicalGuildId) ? `${CHANNELS_ENDPOINT(canonicalGuildId)}` : "";
 
   return (
     <div className="max-w-7xl mx-auto px-6 lg:px-10 py-12">
@@ -1052,8 +1044,8 @@ export default function DashboardPage() {
                   />
                 </div>
 
-                {/* Debug quick links */}
-                {isSnowflake(canonicalGuildId) ? (
+                {/* Debug quick links (dev only) */}
+                {process.env.NODE_ENV !== "production" && isSnowflake(canonicalGuildId) ? (
                   <div className="mt-3 flex flex-wrap gap-2">
                     <a className="woc-btn-ghost text-xs" href={debugStatusUrl} target="_blank" rel="noreferrer">
                       Open status JSON
@@ -1244,9 +1236,7 @@ export default function DashboardPage() {
                         <div className="mt-4 space-y-2">
                           {MODULE_TREE.map((cat) => {
                             const active = cat.key === moduleCategory;
-
-                            // ✅ FAIL-OPEN UI: undefined => ON, explicit false => OFF
-                            const enabled = settings?.modules?.[cat.key]?.enabled !== false;
+                            const enabled = isModuleEnabled(settings.modules, cat.key);
 
                             return (
                               <button
@@ -1300,11 +1290,9 @@ export default function DashboardPage() {
 
                           <label className="inline-flex items-center gap-2">
                             <span className="text-[0.72rem] text-[var(--text-muted)]">Category</span>
-
-                            {/* ✅ FAIL-OPEN UI: undefined => ON */}
                             <input
                               type="checkbox"
-                              checked={settings?.modules?.[activeCategory.key]?.enabled !== false}
+                              checked={isModuleEnabled(settings.modules, activeCategory.key)}
                               onChange={(e) => {
                                 setModuleEnabled(activeCategory.key, e.target.checked);
                                 woc?.setMood?.(e.target.checked ? "story" : "omen");
@@ -1330,10 +1318,8 @@ export default function DashboardPage() {
 
                         <div className="mt-4 grid gap-4 sm:grid-cols-2">
                           {filteredSubs.map((s) => {
-                            // ✅ FAIL-OPEN UI: undefined => ON
-                            const catEnabled = settings?.modules?.[activeCategory.key]?.enabled !== false;
-                            const subEnabled =
-                              settings?.modules?.[activeCategory.key]?.subs?.[s.key] !== false;
+                            const catEnabled = isModuleEnabled(settings.modules, activeCategory.key);
+                            const subEnabled = isSubEnabled(settings.modules, activeCategory.key, s.key);
 
                             return (
                               <div key={s.key} className="woc-card p-4 flex flex-col justify-between">
@@ -1357,7 +1343,6 @@ export default function DashboardPage() {
                                       disabled={!catEnabled}
                                       onChange={(e) => {
                                         setSubEnabled(activeCategory.key, s.key, e.target.checked);
-                                        setDirty(true);
                                       }}
                                     />
                                   </label>
@@ -1374,7 +1359,7 @@ export default function DashboardPage() {
                         </div>
 
                         <div className="mt-4 text-[0.72rem] text-[var(--text-muted)]">
-                          This panel controls feature flags. Next step is wiring your bot to read <b>settings.modules</b>.
+                          This panel controls feature flags. Your bot already reads <b>settings.modules</b> in interactionCreate.
                         </div>
                       </div>
                     </div>
