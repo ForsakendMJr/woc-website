@@ -707,28 +707,36 @@ export default function DashboardPage() {
   }, [authed, canonicalGuildId]);
 
 async function fetchChannelsForGuild(gid, signal) {
-  // Try primary route shape first: /api/guilds/:gid/channels
   try {
     const data = await fetchJson(CHANNELS_ENDPOINT(gid), { cache: "no-store", signal });
     const list = Array.isArray(data.channels) ? data.channels : [];
     return { channels: list, warning: safeErrorMessage(data.warning || "") };
   } catch (e) {
+    // If the bot isn't in the guild, Discord returns 403 Missing Access.
+    // Treat that as "not installed" instead of a scary error.
+    const status = e?.status;
+    const body = String(e?.body || e?.message || "");
+    const isMissingAccess =
+      status === 403 ||
+      body.includes('"code": 50001') ||
+      body.toLowerCase().includes("missing access");
+
+    if (isMissingAccess) {
+      return { channels: [], warning: "" };
+    }
+
     const msg = safeErrorMessage(e?.message || "");
 
-    // Fallback when route is miswired, missing params, or returns HTML
     const shouldFallback =
       msg.toLowerCase().includes("missing") ||
       msg.toLowerCase().includes("guildid") ||
       msg.toLowerCase().includes("non-json") ||
       msg.toLowerCase().includes("html") ||
       msg.toLowerCase().includes("route") ||
-      e?.status === 404;
+      status === 404;
 
     if (shouldFallback) {
-      const data2 = await fetchJson(DISCORD_CHANNELS_FALLBACK(gid), {
-        cache: "no-store",
-        signal,
-      });
+      const data2 = await fetchJson(DISCORD_CHANNELS_FALLBACK(gid), { cache: "no-store", signal });
       const list2 = Array.isArray(data2.channels) ? data2.channels : [];
       return { channels: list2, warning: safeErrorMessage(data2.warning || "") };
     }
@@ -738,35 +746,44 @@ async function fetchChannelsForGuild(gid, signal) {
 }
 
 
-  // On guild change: fetch channels for pickers
-  useEffect(() => {
-    if (!authed) return;
-    if (!isSnowflake(canonicalGuildId)) return;
+// On guild change: fetch channels for pickers
+useEffect(() => {
+  if (!authed) return;
+  if (!isSnowflake(canonicalGuildId)) return;
 
-    if (channelsAbortRef.current) channelsAbortRef.current.abort();
-    const ac = new AbortController();
-    channelsAbortRef.current = ac;
-
-    setChannelsLoading(true);
+  // If bot isn't installed, don't even try fetching channels (avoids 403 noise)
+  if (install.installed === false) {
+    setChannelsLoading(false);
     setChannels([]);
     setChannelsWarn("");
+    return;
+  }
 
-    (async () => {
-      try {
-        const { channels: list, warning } = await fetchChannelsForGuild(canonicalGuildId, ac.signal);
-        setChannels(list);
-        setChannelsWarn(warning && warning !== "Missing/invalid guildId." ? warning : "");
-      } catch (e) {
-        if (e?.name === "AbortError") return;
-        const msg = safeErrorMessage(e?.message || "Failed to load channels.");
-        setChannelsWarn(msg === "Missing/invalid guildId." ? "" : msg);
-      } finally {
-        if (!ac.signal.aborted) setChannelsLoading(false);
-      }
-    })();
+  if (channelsAbortRef.current) channelsAbortRef.current.abort();
+  const ac = new AbortController();
+  channelsAbortRef.current = ac;
 
-    return () => ac.abort();
-  }, [authed, canonicalGuildId]);
+  setChannelsLoading(true);
+  setChannels([]);
+  setChannelsWarn("");
+
+  (async () => {
+    try {
+      const { channels: list, warning } = await fetchChannelsForGuild(canonicalGuildId, ac.signal);
+      setChannels(list);
+      setChannelsWarn(warning && warning !== "Missing/invalid guildId." ? warning : "");
+    } catch (e) {
+      if (e?.name === "AbortError") return;
+      const msg = safeErrorMessage(e?.message || "Failed to load channels.");
+      setChannelsWarn(msg === "Missing/invalid guildId." ? "" : msg);
+    } finally {
+      if (!ac.signal.aborted) setChannelsLoading(false);
+    }
+  })();
+
+  return () => ac.abort();
+}, [authed, canonicalGuildId, install.installed]);
+
 
   async function saveSettings() {
     if (!isSnowflake(canonicalGuildId) || !settings) return;
