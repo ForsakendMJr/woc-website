@@ -706,21 +706,37 @@ export default function DashboardPage() {
     })();
   }, [authed, canonicalGuildId]);
 
-  async function fetchChannelsForGuild(gid, signal) {
-    // Primary: /api/guilds/:gid/channels
-    try {
-      const data = await fetchJson(CHANNELS_ENDPOINT(gid), { cache: "no-store", signal });
-      const list = Array.isArray(data.channels) ? data.channels : [];
-      const warn = safeErrorMessage(data.warning || data.error || "");
-      return { channels: list, warning: warn };
-    } catch (e) {
-      // Fallback: /api/discord/channels?guildId=...
-      const data2 = await fetchJson(DISCORD_CHANNELS_FALLBACK(gid), { cache: "no-store", signal });
+async function fetchChannelsForGuild(gid, signal) {
+  // Try primary route shape first: /api/guilds/:gid/channels
+  try {
+    const data = await fetchJson(CHANNELS_ENDPOINT(gid), { cache: "no-store", signal });
+    const list = Array.isArray(data.channels) ? data.channels : [];
+    return { channels: list, warning: safeErrorMessage(data.warning || "") };
+  } catch (e) {
+    const msg = safeErrorMessage(e?.message || "");
+
+    // Fallback when route is miswired, missing params, or returns HTML
+    const shouldFallback =
+      msg.toLowerCase().includes("missing") ||
+      msg.toLowerCase().includes("guildid") ||
+      msg.toLowerCase().includes("non-json") ||
+      msg.toLowerCase().includes("html") ||
+      msg.toLowerCase().includes("route") ||
+      e?.status === 404;
+
+    if (shouldFallback) {
+      const data2 = await fetchJson(DISCORD_CHANNELS_FALLBACK(gid), {
+        cache: "no-store",
+        signal,
+      });
       const list2 = Array.isArray(data2.channels) ? data2.channels : [];
-      const warn2 = safeErrorMessage(data2.warning || data2.error || "");
-      return { channels: list2, warning: warn2 };
+      return { channels: list2, warning: safeErrorMessage(data2.warning || "") };
     }
+
+    throw e;
   }
+}
+
 
   // On guild change: fetch channels for pickers
   useEffect(() => {
