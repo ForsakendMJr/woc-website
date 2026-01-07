@@ -1,4 +1,3 @@
-// app/api/guilds/[guildId]/status/route.js
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -26,15 +25,22 @@ function isSnowflake(x) {
   return /^\d{16,20}$/.test(s);
 }
 
-function pickGuildId(req, params) {
-  // 1) /api/guilds/[guildId]/status
-  const fromParam = params?.guildId ? String(params.guildId) : "";
+// Handles:
+// - params.guildId as string (normal [guildId])
+// - params.guildId as array (catch-all [...guildId])
+function normalizeParamGuildId(params) {
+  const v = params?.guildId;
+  if (Array.isArray(v)) return v[0] ? String(v[0]).trim() : "";
+  return v ? String(v).trim() : "";
+}
 
-  // 2) /api/guilds/status?guildId=...
+function pickGuildId(req, params) {
+  const fromParam = normalizeParamGuildId(params);
+
   let fromQuery = "";
   try {
     const url = new URL(req.url);
-    fromQuery = url.searchParams.get("guildId") || "";
+    fromQuery = (url.searchParams.get("guildId") || "").trim();
   } catch {}
 
   const gid = (fromParam || fromQuery || "").trim();
@@ -50,10 +56,16 @@ function safeText(input, max = 500) {
 export async function GET(req, { params }) {
   const guildId = pickGuildId(req, params);
 
-  // Always 200: dashboard fetchJson won’t throw
+  // Always 200 JSON so your dashboard never sees HTML/redirect here
   if (!guildId) {
     return NextResponse.json(
-      { ok: true, installed: null, guildId: "", bot_token_source: null, warning: "Missing/invalid guildId." },
+      {
+        ok: true,
+        installed: null,
+        guildId: "",
+        bot_token_source: null,
+        warning: "Missing/invalid guildId.",
+      },
       { status: 200 }
     );
   }
@@ -79,7 +91,6 @@ export async function GET(req, { params }) {
       cache: "no-store",
     });
 
-    // 403/404 means the bot can’t see the guild (not in server, or no access)
     if (res.status === 403 || res.status === 404) {
       return NextResponse.json(
         { ok: true, installed: false, guildId, bot_token_source: source, warning: "" },

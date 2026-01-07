@@ -1,4 +1,3 @@
-// app/api/guilds/[guildId]/channels/route.js
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -26,13 +25,19 @@ function isSnowflake(x) {
   return /^\d{16,20}$/.test(s);
 }
 
+function normalizeParamGuildId(params) {
+  const v = params?.guildId;
+  if (Array.isArray(v)) return v[0] ? String(v[0]).trim() : "";
+  return v ? String(v).trim() : "";
+}
+
 function pickGuildId(req, params) {
-  const fromParam = params?.guildId ? String(params.guildId) : "";
+  const fromParam = normalizeParamGuildId(params);
 
   let fromQuery = "";
   try {
     const url = new URL(req.url);
-    fromQuery = url.searchParams.get("guildId") || "";
+    fromQuery = (url.searchParams.get("guildId") || "").trim();
   } catch {}
 
   const gid = (fromParam || fromQuery || "").trim();
@@ -46,7 +51,6 @@ function safeText(input, max = 500) {
 }
 
 function typeLabel(t) {
-  // Discord API v10 channel types (common ones)
   const map = {
     0: "Text",
     2: "Voice",
@@ -61,7 +65,7 @@ function typeLabel(t) {
 export async function GET(req, { params }) {
   const guildId = pickGuildId(req, params);
 
-  // Always 200: dashboard won’t throw on fetchJson
+  // Always 200 JSON
   if (!guildId) {
     return NextResponse.json(
       { ok: true, channels: [], guildId: "", bot_token_source: null, warning: "Missing guildId." },
@@ -70,6 +74,7 @@ export async function GET(req, { params }) {
   }
 
   const { token: botToken, source } = getBotToken();
+
   if (!botToken) {
     return NextResponse.json(
       {
