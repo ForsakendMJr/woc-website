@@ -14,6 +14,9 @@ const STATUS_ENDPOINT = (gid) => `/api/guilds/${encodeURIComponent(gid)}/status`
 const SETTINGS_ENDPOINT = (gid) => `/api/guilds/${encodeURIComponent(gid)}/settings`;
 const CHANNELS_ENDPOINT = (gid) => `/api/guilds/${encodeURIComponent(gid)}/channels`;
 
+// Fallback endpoint (some builds use this style)
+const DISCORD_CHANNELS_FALLBACK = (gid) => `/api/discord/channels?guildId=${encodeURIComponent(gid)}`;
+
 function safeGet(key, fallback = "") {
   try {
     const v = localStorage.getItem(key);
@@ -45,7 +48,6 @@ function isSnowflake(id) {
 
 function deepClone(obj) {
   try {
-    // structuredClone exists in modern browsers
     // eslint-disable-next-line no-undef
     if (typeof structuredClone === "function") return structuredClone(obj);
   } catch {}
@@ -228,7 +230,9 @@ function GuildPicker({ guilds, value, onChange, disabled }) {
               </button>
             );
           })}
-          {!guilds.length ? <div className="px-3 py-3 text-sm text-[var(--text-muted)]">No servers found.</div> : null}
+          {!guilds.length ? (
+            <div className="px-3 py-3 text-sm text-[var(--text-muted)]">No servers found.</div>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -504,8 +508,13 @@ export default function DashboardPage() {
   const [guilds, setGuilds] = useState([]);
   const [guildWarn, setGuildWarn] = useState("");
 
-  // Store raw localStorage value, but never let it cause API calls until validated.
-  const [selectedGuildIdRaw, setSelectedGuildIdRaw] = useState(() => safeGet(LS.selectedGuild, ""));
+  // NOTE: we store raw localStorage value but never let it drive API calls unless validated.
+  const [selectedGuildIdRaw, setSelectedGuildIdRaw] = useState("");
+
+  // Read LS only on client mount (avoids any weird hydration + stale issues)
+  useEffect(() => {
+    setSelectedGuildIdRaw(safeGet(LS.selectedGuild, ""));
+  }, []);
 
   // Chosen guild must be a real snowflake AND exist in list.
   const selectedGuildId = useMemo(() => {
@@ -521,6 +530,16 @@ export default function DashboardPage() {
     () => guilds.find((g) => String(g.id) === String(selectedGuildId)) || null,
     [guilds, selectedGuildId]
   );
+
+  // Canonical guild id used for EVERY per-guild call (prevents "Missing guildId" mismatches)
+  const canonicalGuildId = useMemo(() => {
+    const gid =
+      selectedGuildId ||
+      selectedGuild?.id ||
+      selectedGuild?.guildId ||
+      safeGet(LS.selectedGuild, "");
+    return isSnowflake(gid) ? String(gid) : "";
+  }, [selectedGuildId, selectedGuild]);
 
   const [install, setInstall] = useState({
     loading: false,
@@ -604,10 +623,14 @@ export default function DashboardPage() {
         if (warn) setGuildWarn(warn);
 
         // Once guilds arrive, force raw selection to a real id
-        const raw = String(selectedGuildIdRaw || "").trim();
+        const raw = String(selectedGuildIdRaw || safeGet(LS.selectedGuild, "") || "").trim();
         const first = String(list[0]?.id || "");
         const validRaw = isSnowflake(raw) && list.some((g) => String(g.id) === raw);
-        if (!validRaw && isSnowflake(first)) {
+
+        if (validRaw) {
+          setSelectedGuildIdRaw(raw);
+          safeSet(LS.selectedGuild, raw);
+        } else if (isSnowflake(first)) {
           setSelectedGuildIdRaw(first);
           safeSet(LS.selectedGuild, first);
         }
@@ -622,14 +645,14 @@ export default function DashboardPage() {
   // Persist selected guild once we have a valid one
   useEffect(() => {
     if (!authed) return;
-    if (!isSnowflake(selectedGuildId)) return;
-    safeSet(LS.selectedGuild, selectedGuildId);
-  }, [authed, selectedGuildId]);
+    if (!isSnowflake(canonicalGuildId)) return;
+    safeSet(LS.selectedGuild, canonicalGuildId);
+  }, [authed, canonicalGuildId]);
 
   // On guild change: install gate + settings
   useEffect(() => {
     if (!authed) return;
-    if (!isSnowflake(selectedGuildId)) return;
+    if (!isSnowflake(canonicalGuildId)) return;
 
     setDirty(false);
 
@@ -641,7 +664,10 @@ export default function DashboardPage() {
     setInstall((s) => ({ ...s, loading: true, warning: "" }));
     (async () => {
       try {
-        const data = await fetchJson(STATUS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
+        const data = await fetchJson(STATUS_ENDPOINT(canonicalGuildId), {
+          cache: "no-store",
+          signal: ac.signal,
+        });
         const rawWarn = safeErrorMessage(data?.warning || "");
         setInstall({
           loading: false,
@@ -664,21 +690,42 @@ export default function DashboardPage() {
 
     (async () => {
       try {
-        const data = await fetchJson(SETTINGS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
+        const data = await fetchJson(SETTINGS_ENDPOINT(canonicalGuildId), {
+          cache: "no-store",
+          signal: ac.signal,
+        });
         setSettings(data.settings);
       } catch (e) {
         if (e?.name === "AbortError") return;
-        setSettings(ensureDefaultSettings(selectedGuildId));
+        setSettings(ensureDefaultSettings(canonicalGuildId));
       } finally {
         if (!ac.signal.aborted) setSettingsLoading(false);
       }
     })();
-  }, [authed, selectedGuildId]);
+  }, [authed, canonicalGuildId]);
+
+  async function fetchChannelsForGuild(gid, signal) {
+    // Try primary route shape first: /api/guilds/:gid/channels
+    try {
+      const data = await fetchJson(CHANNELS_ENDPOINT(gid), { cache: "no-store", signal });
+      const list = Array.isArray(data.channels) ? data.channels : [];
+      return { channels: list, warning: safeErrorMessage(data.warning || "") };
+    } catch (e) {
+      const msg = safeErrorMessage(e?.message || "");
+      // If the API route is wired differently (expects query param), fallback:
+      if (msg.toLowerCase().includes("missing") || msg.toLowerCase().includes("guildid")) {
+        const data2 = await fetchJson(DISCORD_CHANNELS_FALLBACK(gid), { cache: "no-store", signal });
+        const list2 = Array.isArray(data2.channels) ? data2.channels : [];
+        return { channels: list2, warning: safeErrorMessage(data2.warning || "") };
+      }
+      throw e;
+    }
+  }
 
   // On guild change: fetch channels for pickers
   useEffect(() => {
     if (!authed) return;
-    if (!isSnowflake(selectedGuildId)) return;
+    if (!isSnowflake(canonicalGuildId)) return;
 
     if (channelsAbortRef.current) channelsAbortRef.current.abort();
     const ac = new AbortController();
@@ -690,12 +737,9 @@ export default function DashboardPage() {
 
     (async () => {
       try {
-        const data = await fetchJson(CHANNELS_ENDPOINT(selectedGuildId), { cache: "no-store", signal: ac.signal });
-        const list = Array.isArray(data.channels) ? data.channels : [];
+        const { channels: list, warning } = await fetchChannelsForGuild(canonicalGuildId, ac.signal);
         setChannels(list);
-
-        const warn = safeErrorMessage(data.warning || "");
-        setChannelsWarn(warn && warn !== "Missing/invalid guildId." ? warn : "");
+        setChannelsWarn(warning && warning !== "Missing/invalid guildId." ? warning : "");
       } catch (e) {
         if (e?.name === "AbortError") return;
         const msg = safeErrorMessage(e?.message || "Failed to load channels.");
@@ -706,14 +750,14 @@ export default function DashboardPage() {
     })();
 
     return () => ac.abort();
-  }, [authed, selectedGuildId]);
+  }, [authed, canonicalGuildId]);
 
   async function saveSettings() {
-    if (!isSnowflake(selectedGuildId) || !settings) return;
+    if (!isSnowflake(canonicalGuildId) || !settings) return;
 
     setSettingsLoading(true);
     try {
-      const data = await fetchJson(SETTINGS_ENDPOINT(selectedGuildId), {
+      const data = await fetchJson(SETTINGS_ENDPOINT(canonicalGuildId), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(settings),
@@ -762,7 +806,10 @@ export default function DashboardPage() {
     const q = moduleSearch.trim().toLowerCase();
     const subs = activeCategory?.subs || [];
     if (!q) return subs;
-    return subs.filter((s) => (s.label + " " + (s.desc || "")).toLowerCase().includes(q) || s.key.toLowerCase().includes(q));
+    return subs.filter(
+      (s) =>
+        (s.label + " " + (s.desc || "")).toLowerCase().includes(q) || s.key.toLowerCase().includes(q)
+    );
   }, [activeCategory, moduleSearch]);
 
   function setModuleEnabled(categoryKey, enabled) {
@@ -869,7 +916,7 @@ export default function DashboardPage() {
                       {channelsLoading ? <Pill>Loading channels…</Pill> : null}
                       {install.installed === true ? <Pill tone="ok">Installed ✅</Pill> : null}
                       {install.installed === false ? <Pill tone="warn">Not installed 🔒</Pill> : null}
-                      {!isSnowflake(selectedGuildId) ? <Pill tone="warn">Pick a server</Pill> : null}
+                      {!isSnowflake(canonicalGuildId) ? <Pill tone="warn">Pick a server</Pill> : null}
                       {showNoticePill ? <Pill tone="warn">Notice ⚠️</Pill> : null}
                       <button type="button" className="woc-btn-ghost text-xs" onClick={resetSelectedGuild}>
                         Reset selection
@@ -888,7 +935,7 @@ export default function DashboardPage() {
                 <div className="mt-4">
                   <GuildPicker
                     guilds={guilds}
-                    value={selectedGuildId}
+                    value={canonicalGuildId}
                     disabled={!guilds.length}
                     onChange={(gid) => {
                       const next = String(gid);
@@ -908,7 +955,7 @@ export default function DashboardPage() {
                   </div>
                 ) : null}
 
-                {channelsWarn && isSnowflake(selectedGuildId) ? (
+                {channelsWarn && isSnowflake(canonicalGuildId) ? (
                   <div className="mt-4 text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
                     <div className="font-semibold">Channel list notice</div>
                     <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{channelsWarn}</div>
@@ -925,9 +972,9 @@ export default function DashboardPage() {
                     <a
                       className={cx(
                         "mt-3 inline-flex items-center gap-2 woc-btn-primary",
-                        !clientId || !isSnowflake(selectedGuildId) ? "opacity-60 cursor-not-allowed" : ""
+                        !clientId || !isSnowflake(canonicalGuildId) ? "opacity-60 cursor-not-allowed" : ""
                       )}
-                      href={clientId && isSnowflake(selectedGuildId) ? inviteLinkForGuild(selectedGuildId) : undefined}
+                      href={clientId && isSnowflake(canonicalGuildId) ? inviteLinkForGuild(canonicalGuildId) : undefined}
                       target="_blank"
                       rel="noreferrer"
                       onClick={() => woc?.setMood?.("battle")}
@@ -956,14 +1003,14 @@ export default function DashboardPage() {
                   <button
                     className={cx(
                       "woc-btn-primary",
-                      !gateInstalled || !dirty || settingsLoading || !isSnowflake(selectedGuildId)
+                      !gateInstalled || !dirty || settingsLoading || !isSnowflake(canonicalGuildId)
                         ? "opacity-60 cursor-not-allowed"
                         : ""
                     )}
-                    disabled={!gateInstalled || !dirty || settingsLoading || !isSnowflake(selectedGuildId)}
+                    disabled={!gateInstalled || !dirty || settingsLoading || !isSnowflake(canonicalGuildId)}
                     onClick={saveSettings}
                     title={
-                      !isSnowflake(selectedGuildId)
+                      !isSnowflake(canonicalGuildId)
                         ? "Pick a server first."
                         : !gateInstalled
                         ? "Invite WoC to unlock saving."
@@ -986,8 +1033,8 @@ export default function DashboardPage() {
                   {/* tiny debug strip */}
                   <div className="mt-2 text-[0.7rem] text-[var(--text-muted)]">
                     Selected guildId:{" "}
-                    <span className={cx("font-semibold", isSnowflake(selectedGuildId) ? "text-emerald-200" : "text-amber-200")}>
-                      {selectedGuildId || "(none)"}
+                    <span className={cx("font-semibold", isSnowflake(canonicalGuildId) ? "text-emerald-200" : "text-amber-200")}>
+                      {canonicalGuildId || "(none)"}
                     </span>
                   </div>
                 </div>
