@@ -1,7 +1,7 @@
 // app/api/auth/discord/guilds/route.js
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "../../[...nextauth]/_authOptions";
+import { authOptions } from "../auth/[...nextauth]/_authOptions";
 
 export const dynamic = "force-dynamic";
 
