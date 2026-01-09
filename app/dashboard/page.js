@@ -1149,6 +1149,19 @@ export default function DashboardPage() {
               </div>
             </div>
 
+<div className="mt-2 text-[0.7rem] text-[var(--text-muted)] break-all">
+  Client ID seen by browser:{" "}
+  <span className="font-semibold text-[var(--text-main)]">
+    {clientId || "(empty)"}
+  </span>
+  <br />
+  Invite URL:{" "}
+  <span className="font-semibold text-[var(--text-main)]">
+    {buildBotInviteUrl(canonicalGuildId) || "(invite url empty)"}
+  </span>
+</div>
+
+
             <div className="mt-6 woc-card p-5">
               <div className="flex flex-wrap gap-2">
                 {subnav.map(([k, label]) => (
