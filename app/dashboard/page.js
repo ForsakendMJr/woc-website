@@ -107,7 +107,12 @@ function Pill({ tone = "default", children }) {
     bad: "border-rose-400/40 bg-rose-500/10 text-rose-100",
   };
   return (
-    <span className={cx("text-[0.72rem] px-2 py-1 rounded-full border", tones[tone] || tones.default)}>
+    <span
+      className={cx(
+        "text-[0.72rem] px-2 py-1 rounded-full border",
+        tones[tone] || tones.default
+      )}
+    >
       {children}
     </span>
   );
@@ -118,7 +123,9 @@ function SectionTitle({ title, subtitle, right }) {
     <div className="flex items-start justify-between gap-3">
       <div>
         <div className="font-semibold">{title}</div>
-        {subtitle ? <div className="text-xs text-[var(--text-muted)] mt-1">{subtitle}</div> : null}
+        {subtitle ? (
+          <div className="text-xs text-[var(--text-muted)] mt-1">{subtitle}</div>
+        ) : null}
       </div>
       {right ? <div>{right}</div> : null}
     </div>
@@ -144,7 +151,11 @@ function IconCircle({ guild, size = 40 }) {
     >
       {url ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={url} alt={guild?.name || "Server icon"} className="w-full h-full object-cover" />
+        <img
+          src={url}
+          alt={guild?.name || "Server icon"}
+          className="w-full h-full object-cover"
+        />
       ) : (
         <span className="text-xs font-semibold text-[var(--text-muted)]">{label}</span>
       )}
@@ -189,7 +200,9 @@ function GuildPicker({ guilds, value, onChange, disabled }) {
         <div className="flex items-center gap-3 min-w-0">
           <IconCircle guild={selected} size={34} />
           <div className="min-w-0 text-left">
-            <div className="text-sm font-semibold truncate">{selected?.name || "Select a server"}</div>
+            <div className="text-sm font-semibold truncate">
+              {selected?.name || "Select a server"}
+            </div>
             <div className="text-[0.72rem] text-[var(--text-muted)] truncate">
               {selected?.role ? `${selected.role}` : guilds.length ? "—" : "No servers"}
             </div>
@@ -221,13 +234,17 @@ function GuildPicker({ guilds, value, onChange, disabled }) {
                 className={cx(
                   "w-full px-3 py-2 flex items-center gap-3 text-left",
                   "hover:bg-[color-mix(in_oklab,var(--bg-card)_85%,transparent)]",
-                  active ? "bg-[color-mix(in_oklab,var(--accent-soft)_45%,transparent)]" : ""
+                  active
+                    ? "bg-[color-mix(in_oklab,var(--accent-soft)_45%,transparent)]"
+                    : ""
                 )}
               >
                 <IconCircle guild={g} size={34} />
                 <div className="min-w-0">
                   <div className="text-sm font-semibold truncate">{g.name}</div>
-                  <div className="text-[0.72rem] text-[var(--text-muted)] truncate">{g.role || "Manager"}</div>
+                  <div className="text-[0.72rem] text-[var(--text-muted)] truncate">
+                    {g.role || "Manager"}
+                  </div>
                 </div>
               </button>
             );
@@ -599,6 +616,7 @@ export default function DashboardPage() {
   const clientId = String(clientIdRaw || "").trim();
   const hasClientId = isSnowflake(clientId);
 
+  // ✅ FIX: always build a FULL absolute Discord URL, and include integration_type=0.
   function buildBotInviteUrl(gid) {
     if (!hasClientId) return "";
 
@@ -606,8 +624,7 @@ export default function DashboardPage() {
     params.set("client_id", clientId);
     params.set("scope", "bot applications.commands");
     params.set("permissions", "8");
-    // Helps align with Discord’s newer install flow (harmless if ignored)
-    params.set("integration_type", "0");
+    params.set("integration_type", "0"); // newer install flow friendly
 
     const guildId = String(gid || "").trim();
     if (isSnowflake(guildId)) {
@@ -760,9 +777,7 @@ export default function DashboardPage() {
       const status = e?.status;
       const body = String(e?.body || e?.message || "");
       const isMissingAccess =
-        status === 403 ||
-        body.includes('"code": 50001') ||
-        body.toLowerCase().includes("missing access");
+        status === 403 || body.includes('"code": 50001') || body.toLowerCase().includes("missing access");
 
       if (isMissingAccess) {
         return { channels: [], warning: "" };
@@ -966,8 +981,12 @@ export default function DashboardPage() {
         ) : !authed ? (
           <div className="mt-8 grid gap-4 sm:grid-cols-2">
             <div className="woc-card p-5">
-              <SectionTitle title="Step 1: Invite WoC" subtitle="Invite first so the dashboard can control something real." />
+              <SectionTitle
+                title="Step 1: Invite WoC"
+                subtitle="Invite first so the dashboard can control something real."
+              />
 
+              {/* ✅ FIX: absolute Discord URL always */}
               <a
                 className={cx(
                   "mt-4 inline-flex w-full justify-center items-center gap-2 woc-btn-primary",
@@ -1107,18 +1126,15 @@ export default function DashboardPage() {
                   </div>
                 ) : null}
 
-                {/* Debug */}
-                <div className="mt-4 woc-card p-4">
-                  <div className="font-semibold text-sm">Debug</div>
-                  <div className="mt-2 text-[0.7rem] text-[var(--text-muted)] break-all">
-                    Client ID seen by browser:{" "}
-                    <span className="font-semibold text-[var(--text-main)]">{clientId || "(empty)"}</span>
-                    <br />
-                    Invite URL (this guild):{" "}
-                    <span className="font-semibold text-[var(--text-main)]">
-                      {buildBotInviteUrl(canonicalGuildId) || "(invite url empty)"}
-                    </span>
-                  </div>
+                {/* Debug block you added */}
+                <div className="mt-2 text-[0.7rem] text-[var(--text-muted)] break-all">
+                  Client ID seen by browser:{" "}
+                  <span className="font-semibold text-[var(--text-main)]">{clientId || "(empty)"}</span>
+                  <br />
+                  Invite URL:{" "}
+                  <span className="font-semibold text-[var(--text-main)]">
+                    {buildBotInviteUrl(canonicalGuildId) || "(invite url empty)"}
+                  </span>
                 </div>
               </div>
 
@@ -1157,7 +1173,12 @@ export default function DashboardPage() {
 
                   <div className="mt-2 text-[0.7rem] text-[var(--text-muted)]">
                     Selected guildId:{" "}
-                    <span className={cx("font-semibold", isSnowflake(canonicalGuildId) ? "text-emerald-200" : "text-amber-200")}>
+                    <span
+                      className={cx(
+                        "font-semibold",
+                        isSnowflake(canonicalGuildId) ? "text-emerald-200" : "text-amber-200"
+                      )}
+                    >
                       {canonicalGuildId || "(none)"}
                     </span>
                   </div>
@@ -1216,11 +1237,15 @@ export default function DashboardPage() {
                           </div>
                           <div className="woc-card p-3">
                             <div className="text-xs text-[var(--text-muted)]">Welcome</div>
-                            <div className="text-lg font-semibold mt-1">{settings.welcome?.enabled ? "On" : "Off"}</div>
+                            <div className="text-lg font-semibold mt-1">
+                              {settings.welcome?.enabled ? "On" : "Off"}
+                            </div>
                           </div>
                           <div className="woc-card p-3">
                             <div className="text-xs text-[var(--text-muted)]">Logs</div>
-                            <div className="text-lg font-semibold mt-1">{settings.logs?.enabled ? "On" : "Off"}</div>
+                            <div className="text-lg font-semibold mt-1">
+                              {settings.logs?.enabled ? "On" : "Off"}
+                            </div>
                           </div>
                           <div className="woc-card p-3">
                             <div className="text-xs text-[var(--text-muted)]">Mood</div>
@@ -1247,7 +1272,9 @@ export default function DashboardPage() {
                     <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
                       <div className="woc-card p-4">
                         <div className="font-semibold">Modules</div>
-                        <div className="text-xs text-[var(--text-muted)] mt-1">Pick a category on the left.</div>
+                        <div className="text-xs text-[var(--text-muted)] mt-1">
+                          Pick a category on the left.
+                        </div>
 
                         <div className="mt-4 space-y-2">
                           {MODULE_TREE.map((cat) => {
@@ -1276,7 +1303,9 @@ export default function DashboardPage() {
                                     <div className="font-semibold truncate">
                                       {cat.emoji} {cat.label}
                                     </div>
-                                    <div className="text-[0.72rem] text-[var(--text-muted)] mt-1 truncate">{cat.desc}</div>
+                                    <div className="text-[0.72rem] text-[var(--text-muted)] mt-1 truncate">
+                                      {cat.desc}
+                                    </div>
                                   </div>
                                   <span
                                     className={cx(
@@ -1301,7 +1330,9 @@ export default function DashboardPage() {
                             <div className="font-semibold text-xl">
                               {activeCategory?.emoji} {activeCategory?.label}
                             </div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">{activeCategory?.desc}</div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">
+                              {activeCategory?.desc}
+                            </div>
                           </div>
 
                           <label className="inline-flex items-center gap-2">
@@ -1342,7 +1373,9 @@ export default function DashboardPage() {
                                 <div className="flex items-start justify-between gap-3">
                                   <div className="min-w-0">
                                     <div className="font-semibold truncate">{s.label}</div>
-                                    <div className="text-xs text-[var(--text-muted)] mt-1">{s.desc || ""}</div>
+                                    <div className="text-xs text-[var(--text-muted)] mt-1">
+                                      {s.desc || ""}
+                                    </div>
                                     <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
                                       Key:{" "}
                                       <span className="font-semibold text-[var(--text-main)]">
@@ -1377,7 +1410,7 @@ export default function DashboardPage() {
                         </div>
 
                         <div className="mt-4 text-[0.72rem] text-[var(--text-muted)]">
-                          This panel controls feature flags. Your bot should read <b>settings.modules</b> server-side.
+                          This panel controls feature flags. Your bot already reads <b>settings.modules</b> in interactionCreate.
                         </div>
                       </div>
                     </div>
@@ -1391,7 +1424,9 @@ export default function DashboardPage() {
                       <div className="grid gap-3 sm:grid-cols-2">
                         <label className="woc-card p-4">
                           <div className="font-semibold text-sm">Enable logging</div>
-                          <div className="text-xs text-[var(--text-muted)] mt-1">Master switch for logs.</div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">
+                            Master switch for logs.
+                          </div>
                           <input
                             type="checkbox"
                             className="mt-3"
@@ -1405,7 +1440,9 @@ export default function DashboardPage() {
 
                         <label className="woc-card p-4">
                           <div className="font-semibold text-sm">Prefix</div>
-                          <div className="text-xs text-[var(--text-muted)] mt-1">Short, sharp, easy to type.</div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">
+                            Short, sharp, easy to type.
+                          </div>
                           <input
                             value={settings.prefix}
                             onChange={(e) => {
@@ -1472,7 +1509,9 @@ export default function DashboardPage() {
                       <div className="grid gap-3 sm:grid-cols-2">
                         <label className="woc-card p-4">
                           <div className="font-semibold text-sm">Enable welcome</div>
-                          <div className="text-xs text-[var(--text-muted)] mt-1">Turns on welcome posts.</div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">
+                            Turns on welcome posts.
+                          </div>
                           <input
                             type="checkbox"
                             className="mt-3"
@@ -1486,7 +1525,9 @@ export default function DashboardPage() {
 
                         <div className="woc-card p-4">
                           <div className="font-semibold text-sm">Welcome channel</div>
-                          <div className="text-xs text-[var(--text-muted)] mt-1">Where the welcome message is posted.</div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">
+                            Where the welcome message is posted.
+                          </div>
 
                           <ChannelPicker
                             channels={textChannels}
@@ -1531,7 +1572,9 @@ export default function DashboardPage() {
 
                         <label className="woc-card p-4 sm:col-span-2">
                           <div className="font-semibold text-sm">Auto role ID</div>
-                          <div className="text-xs text-[var(--text-muted)] mt-1">Optional: role to assign to new members.</div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">
+                            Optional: role to assign to new members.
+                          </div>
                           <input
                             value={settings.welcome?.autoRoleId || ""}
                             onChange={(e) => {
@@ -1563,7 +1606,10 @@ export default function DashboardPage() {
                           ["antiLink", "Anti-link", "Block invite links and suspicious URLs."],
                           ["antiSpam", "Anti-spam", "Rate limit repeated messages."],
                         ].map(([key, label, hint]) => (
-                          <label key={key} className="woc-card p-4 flex items-start justify-between gap-3 cursor-pointer">
+                          <label
+                            key={key}
+                            className="woc-card p-4 flex items-start justify-between gap-3 cursor-pointer"
+                          >
                             <div>
                               <div className="font-semibold text-sm">{label}</div>
                               <div className="text-xs text-[var(--text-muted)] mt-1">{hint}</div>
@@ -1591,7 +1637,10 @@ export default function DashboardPage() {
                   {/* PERSONALITY */}
                   {subtab === "personality" ? (
                     <div className="space-y-4">
-                      <SectionTitle title="WoC personality" subtitle="Keep the dashboard alive, not corporate-boring." />
+                      <SectionTitle
+                        title="WoC personality"
+                        subtitle="Keep the dashboard alive, not corporate-boring."
+                      />
 
                       <div className="grid gap-3 sm:grid-cols-2">
                         <label className="woc-card p-4">
@@ -1627,7 +1676,9 @@ export default function DashboardPage() {
 
                         <label className="woc-card p-4">
                           <div className="font-semibold text-sm">Sass level</div>
-                          <div className="text-xs text-[var(--text-muted)] mt-1">0 = polite librarian, 100 = chaotic bard.</div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">
+                            0 = polite librarian, 100 = chaotic bard.
+                          </div>
 
                           <input
                             type="range"
@@ -1682,7 +1733,10 @@ export default function DashboardPage() {
                   {/* ACTION LOG */}
                   {subtab === "actionlog" ? (
                     <div className="space-y-3">
-                      <SectionTitle title="Action log" subtitle="Soon: admin actions, toggles changed, mod events (from bot/webhook)." />
+                      <SectionTitle
+                        title="Action log"
+                        subtitle="Soon: admin actions, toggles changed, mod events (from bot/webhook)."
+                      />
                       <div className="woc-card p-4 text-sm text-[var(--text-muted)]">
                         No entries yet. The chronicle is empty… suspiciously peaceful.
                       </div>
