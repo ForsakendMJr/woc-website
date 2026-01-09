@@ -529,21 +529,6 @@ function ensureDefaultSettings(guildId) {
   };
 }
 
-// Strong guard: never allow a naked discord oauth URL to be opened
-function isValidInviteUrl(url) {
-  try {
-    const u = new URL(String(url || ""));
-    return (
-      u.hostname === "discord.com" &&
-      u.pathname === "/oauth2/authorize" &&
-      !!u.searchParams.get("client_id") &&
-      !!u.searchParams.get("scope")
-    );
-  } catch {
-    return false;
-  }
-}
-
 export default function DashboardPage() {
   let woc = null;
   try {
@@ -610,7 +595,15 @@ export default function DashboardPage() {
   const [moduleCategory, setModuleCategory] = useState("moderation");
   const [moduleSearch, setModuleSearch] = useState("");
 
-  // IMPORTANT: this must exist in the browser build (NEXT_PUBLIC_*)
+  // Debug: enable by visiting /dashboard?debug=1
+  const [debugOn, setDebugOn] = useState(false);
+  useEffect(() => {
+    try {
+      const qs = new URLSearchParams(window.location.search);
+      setDebugOn(qs.get("debug") === "1" || qs.get("debug") === "true");
+    } catch {}
+  }, []);
+
   const clientIdRaw = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || "";
   const clientId = String(clientIdRaw || "").trim();
   const hasClientId = isSnowflake(clientId);
@@ -622,6 +615,8 @@ export default function DashboardPage() {
     params.set("client_id", clientId);
     params.set("scope", "bot applications.commands");
     params.set("permissions", "8");
+    // Helps some setups with Discord’s newer install flow; harmless if ignored.
+    params.set("integration_type", "0");
 
     const guildId = String(gid || "").trim();
     if (isSnowflake(guildId)) {
@@ -629,14 +624,10 @@ export default function DashboardPage() {
       params.set("disable_guild_select", "true");
     }
 
-    return `https://discord.com/oauth2/authorize?${params.toString()}`;
+    // Discord has occasionally been picky about '+' for spaces; force %20.
+    const qs = params.toString().replace(/\+/g, "%20");
+    return `https://discord.com/oauth2/authorize?${qs}`;
   }
-
-  const inviteUrlGeneric = useMemo(() => buildBotInviteUrl(""), [clientId]);
-  const inviteUrlSelected = useMemo(() => buildBotInviteUrl(canonicalGuildId), [clientId, canonicalGuildId]);
-
-  const inviteGenericOk = useMemo(() => isValidInviteUrl(inviteUrlGeneric), [inviteUrlGeneric]);
-  const inviteSelectedOk = useMemo(() => isValidInviteUrl(inviteUrlSelected), [inviteUrlSelected]);
 
   function showToast(msg, mood = "playful") {
     setToast(msg);
@@ -991,22 +982,15 @@ export default function DashboardPage() {
               <a
                 className={cx(
                   "mt-4 inline-flex w-full justify-center items-center gap-2 woc-btn-primary",
-                  !inviteGenericOk ? "opacity-60 cursor-not-allowed" : ""
+                  !hasClientId ? "opacity-60 cursor-not-allowed" : ""
                 )}
-                href={inviteGenericOk ? inviteUrlGeneric : undefined}
+                href={hasClientId ? buildBotInviteUrl("") : undefined}
                 target="_blank"
                 rel="noreferrer"
                 onClick={(e) => {
-                  if (!inviteGenericOk) {
-                    e.preventDefault();
-                    showToast("Invite URL invalid. Client ID isn’t reaching browser build.", "omen");
-                  }
+                  if (!hasClientId) e.preventDefault();
                 }}
-                title={
-                  inviteGenericOk
-                    ? "Invite WoC to a server"
-                    : "NEXT_PUBLIC_DISCORD_CLIENT_ID missing/invalid in deployed build"
-                }
+                title={hasClientId ? "Invite WoC to a server" : "Set NEXT_PUBLIC_DISCORD_CLIENT_ID in env and redeploy"}
               >
                 Add WoC to Discord <span className="text-base">➕</span>
               </a>
@@ -1028,20 +1012,20 @@ export default function DashboardPage() {
               </button>
             </div>
 
-            <div className="woc-card p-5 sm:col-span-2">
-              <div className="text-xs text-[var(--text-muted)] break-all">
-                <div className="font-semibold text-[var(--text-main)]">Debug (browser build)</div>
-                Client ID seen by browser:{" "}
-                <span className="font-semibold text-[var(--text-main)]">{clientId || "(empty)"}</span>
-                <br />
-                Raw length: {String(clientIdRaw || "").length} | Trim length: {String(clientId || "").length}
-                <br />
-                Invite URL (generic):{" "}
-                <span className="font-semibold text-[var(--text-main)]">
-                  {inviteUrlGeneric || "(invite url empty)"}
-                </span>
+            {debugOn ? (
+              <div className="woc-card p-5 sm:col-span-2">
+                <div className="text-xs text-[var(--text-muted)] break-all">
+                  <div className="font-semibold text-[var(--text-main)]">Debug</div>
+                  <div className="mt-2">
+                    Client ID seen by browser: <b className="text-[var(--text-main)]">{clientId || "(empty)"}</b>
+                  </div>
+                  <div className="mt-2">
+                    Invite URL (no guild):{" "}
+                    <b className="text-[var(--text-main)]">{buildBotInviteUrl("") || "(invite url empty)"}</b>
+                  </div>
+                </div>
               </div>
-            </div>
+            ) : null}
           </div>
         ) : (
           <>
@@ -1123,25 +1107,16 @@ export default function DashboardPage() {
                     <a
                       className={cx(
                         "mt-3 inline-flex items-center gap-2 woc-btn-primary",
-                        !inviteSelectedOk ? "opacity-60 cursor-not-allowed" : ""
+                        !hasClientId || !isSnowflake(canonicalGuildId) ? "opacity-60 cursor-not-allowed" : ""
                       )}
-                      href={inviteSelectedOk ? inviteUrlSelected : undefined}
+                      href={hasClientId && isSnowflake(canonicalGuildId) ? buildBotInviteUrl(canonicalGuildId) : undefined}
                       target="_blank"
                       rel="noreferrer"
                       onClick={(e) => {
-                        if (!inviteSelectedOk) {
-                          e.preventDefault();
-                          woc?.setMood?.("omen");
-                          showToast("Invite URL invalid for selected guild.", "omen");
-                        } else {
-                          woc?.setMood?.("battle");
-                        }
+                        if (!hasClientId || !isSnowflake(canonicalGuildId)) e.preventDefault();
+                        woc?.setMood?.("battle");
                       }}
-                      title={
-                        inviteSelectedOk
-                          ? "Invite WoC to this server"
-                          : "Invite URL invalid. Check NEXT_PUBLIC_DISCORD_CLIENT_ID + redeploy."
-                      }
+                      title={hasClientId ? "Invite WoC to this server" : "Set NEXT_PUBLIC_DISCORD_CLIENT_ID in env and redeploy"}
                     >
                       Invite WoC to this server <span>➕</span>
                     </a>
@@ -1155,17 +1130,22 @@ export default function DashboardPage() {
                         Once invited, refresh this page. Gate opens automatically.
                       </div>
                     )}
+                  </div>
+                ) : null}
 
-                    <div className="mt-3 text-[0.72rem] text-[var(--text-muted)] break-all">
-                      Client ID seen by browser:{" "}
-                      <span className="font-semibold text-[var(--text-main)]">{clientId || "(empty)"}</span>
-                      <br />
-                      Raw length: {String(clientIdRaw || "").length} | Trim length: {String(clientId || "").length}
-                      <br />
-                      Invite URL (selected):{" "}
-                      <span className="font-semibold text-[var(--text-main)]">
-                        {inviteUrlSelected || "(invite url empty)"}
-                      </span>
+                {debugOn ? (
+                  <div className="mt-4 woc-card p-4">
+                    <div className="text-xs text-[var(--text-muted)] break-all">
+                      <div className="font-semibold text-[var(--text-main)]">Debug</div>
+                      <div className="mt-2">
+                        Client ID seen by browser: <b className="text-[var(--text-main)]">{clientId || "(empty)"}</b>
+                      </div>
+                      <div className="mt-2">
+                        Invite URL (this guild):{" "}
+                        <b className="text-[var(--text-main)]">
+                          {buildBotInviteUrl(canonicalGuildId) || "(invite url empty)"}
+                        </b>
+                      </div>
                     </div>
                   </div>
                 ) : null}
