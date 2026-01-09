@@ -595,15 +595,6 @@ export default function DashboardPage() {
   const [moduleCategory, setModuleCategory] = useState("moderation");
   const [moduleSearch, setModuleSearch] = useState("");
 
-  // Debug: enable by visiting /dashboard?debug=1
-  const [debugOn, setDebugOn] = useState(false);
-  useEffect(() => {
-    try {
-      const qs = new URLSearchParams(window.location.search);
-      setDebugOn(qs.get("debug") === "1" || qs.get("debug") === "true");
-    } catch {}
-  }, []);
-
   const clientIdRaw = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || "";
   const clientId = String(clientIdRaw || "").trim();
   const hasClientId = isSnowflake(clientId);
@@ -615,7 +606,7 @@ export default function DashboardPage() {
     params.set("client_id", clientId);
     params.set("scope", "bot applications.commands");
     params.set("permissions", "8");
-    // Helps some setups with Discord’s newer install flow; harmless if ignored.
+    // Helps align with Discord’s newer install flow (harmless if ignored)
     params.set("integration_type", "0");
 
     const guildId = String(gid || "").trim();
@@ -624,9 +615,7 @@ export default function DashboardPage() {
       params.set("disable_guild_select", "true");
     }
 
-    // Discord has occasionally been picky about '+' for spaces; force %20.
-    const qs = params.toString().replace(/\+/g, "%20");
-    return `https://discord.com/oauth2/authorize?${qs}`;
+    return `https://discord.com/oauth2/authorize?${params.toString()}`;
   }
 
   function showToast(msg, mood = "playful") {
@@ -1011,21 +1000,6 @@ export default function DashboardPage() {
                 Sign in with Discord <span>🔐</span>
               </button>
             </div>
-
-            {debugOn ? (
-              <div className="woc-card p-5 sm:col-span-2">
-                <div className="text-xs text-[var(--text-muted)] break-all">
-                  <div className="font-semibold text-[var(--text-main)]">Debug</div>
-                  <div className="mt-2">
-                    Client ID seen by browser: <b className="text-[var(--text-main)]">{clientId || "(empty)"}</b>
-                  </div>
-                  <div className="mt-2">
-                    Invite URL (no guild):{" "}
-                    <b className="text-[var(--text-main)]">{buildBotInviteUrl("") || "(invite url empty)"}</b>
-                  </div>
-                </div>
-              </div>
-            ) : null}
           </div>
         ) : (
           <>
@@ -1133,22 +1107,19 @@ export default function DashboardPage() {
                   </div>
                 ) : null}
 
-                {debugOn ? (
-                  <div className="mt-4 woc-card p-4">
-                    <div className="text-xs text-[var(--text-muted)] break-all">
-                      <div className="font-semibold text-[var(--text-main)]">Debug</div>
-                      <div className="mt-2">
-                        Client ID seen by browser: <b className="text-[var(--text-main)]">{clientId || "(empty)"}</b>
-                      </div>
-                      <div className="mt-2">
-                        Invite URL (this guild):{" "}
-                        <b className="text-[var(--text-main)]">
-                          {buildBotInviteUrl(canonicalGuildId) || "(invite url empty)"}
-                        </b>
-                      </div>
-                    </div>
+                {/* Debug */}
+                <div className="mt-4 woc-card p-4">
+                  <div className="font-semibold text-sm">Debug</div>
+                  <div className="mt-2 text-[0.7rem] text-[var(--text-muted)] break-all">
+                    Client ID seen by browser:{" "}
+                    <span className="font-semibold text-[var(--text-main)]">{clientId || "(empty)"}</span>
+                    <br />
+                    Invite URL (this guild):{" "}
+                    <span className="font-semibold text-[var(--text-main)]">
+                      {buildBotInviteUrl(canonicalGuildId) || "(invite url empty)"}
+                    </span>
                   </div>
-                ) : null}
+                </div>
               </div>
 
               <div className="woc-card p-5">
@@ -1406,7 +1377,7 @@ export default function DashboardPage() {
                         </div>
 
                         <div className="mt-4 text-[0.72rem] text-[var(--text-muted)]">
-                          This panel controls feature flags. Your bot already reads <b>settings.modules</b> in interactionCreate.
+                          This panel controls feature flags. Your bot should read <b>settings.modules</b> server-side.
                         </div>
                       </div>
                     </div>
