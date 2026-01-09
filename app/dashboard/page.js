@@ -529,6 +529,21 @@ function ensureDefaultSettings(guildId) {
   };
 }
 
+// Strong guard: never allow a naked discord oauth URL to be opened
+function isValidInviteUrl(url) {
+  try {
+    const u = new URL(String(url || ""));
+    return (
+      u.hostname === "discord.com" &&
+      u.pathname === "/oauth2/authorize" &&
+      !!u.searchParams.get("client_id") &&
+      !!u.searchParams.get("scope")
+    );
+  } catch {
+    return false;
+  }
+}
+
 export default function DashboardPage() {
   let woc = null;
   try {
@@ -595,6 +610,7 @@ export default function DashboardPage() {
   const [moduleCategory, setModuleCategory] = useState("moderation");
   const [moduleSearch, setModuleSearch] = useState("");
 
+  // IMPORTANT: this must exist in the browser build (NEXT_PUBLIC_*)
   const clientIdRaw = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || "";
   const clientId = String(clientIdRaw || "").trim();
   const hasClientId = isSnowflake(clientId);
@@ -615,6 +631,12 @@ export default function DashboardPage() {
 
     return `https://discord.com/oauth2/authorize?${params.toString()}`;
   }
+
+  const inviteUrlGeneric = useMemo(() => buildBotInviteUrl(""), [clientId]);
+  const inviteUrlSelected = useMemo(() => buildBotInviteUrl(canonicalGuildId), [clientId, canonicalGuildId]);
+
+  const inviteGenericOk = useMemo(() => isValidInviteUrl(inviteUrlGeneric), [inviteUrlGeneric]);
+  const inviteSelectedOk = useMemo(() => isValidInviteUrl(inviteUrlSelected), [inviteUrlSelected]);
 
   function showToast(msg, mood = "playful") {
     setToast(msg);
@@ -969,15 +991,22 @@ export default function DashboardPage() {
               <a
                 className={cx(
                   "mt-4 inline-flex w-full justify-center items-center gap-2 woc-btn-primary",
-                  !hasClientId ? "opacity-60 cursor-not-allowed" : ""
+                  !inviteGenericOk ? "opacity-60 cursor-not-allowed" : ""
                 )}
-                href={hasClientId ? buildBotInviteUrl("") : undefined}
+                href={inviteGenericOk ? inviteUrlGeneric : undefined}
                 target="_blank"
                 rel="noreferrer"
                 onClick={(e) => {
-                  if (!hasClientId) e.preventDefault();
+                  if (!inviteGenericOk) {
+                    e.preventDefault();
+                    showToast("Invite URL invalid. Client ID isn’t reaching browser build.", "omen");
+                  }
                 }}
-                title={hasClientId ? "Invite WoC to a server" : "Set NEXT_PUBLIC_DISCORD_CLIENT_ID in env and redeploy"}
+                title={
+                  inviteGenericOk
+                    ? "Invite WoC to a server"
+                    : "NEXT_PUBLIC_DISCORD_CLIENT_ID missing/invalid in deployed build"
+                }
               >
                 Add WoC to Discord <span className="text-base">➕</span>
               </a>
@@ -997,6 +1026,21 @@ export default function DashboardPage() {
               >
                 Sign in with Discord <span>🔐</span>
               </button>
+            </div>
+
+            <div className="woc-card p-5 sm:col-span-2">
+              <div className="text-xs text-[var(--text-muted)] break-all">
+                <div className="font-semibold text-[var(--text-main)]">Debug (browser build)</div>
+                Client ID seen by browser:{" "}
+                <span className="font-semibold text-[var(--text-main)]">{clientId || "(empty)"}</span>
+                <br />
+                Raw length: {String(clientIdRaw || "").length} | Trim length: {String(clientId || "").length}
+                <br />
+                Invite URL (generic):{" "}
+                <span className="font-semibold text-[var(--text-main)]">
+                  {inviteUrlGeneric || "(invite url empty)"}
+                </span>
+              </div>
             </div>
           </div>
         ) : (
@@ -1079,16 +1123,25 @@ export default function DashboardPage() {
                     <a
                       className={cx(
                         "mt-3 inline-flex items-center gap-2 woc-btn-primary",
-                        !hasClientId || !isSnowflake(canonicalGuildId) ? "opacity-60 cursor-not-allowed" : ""
+                        !inviteSelectedOk ? "opacity-60 cursor-not-allowed" : ""
                       )}
-                      href={hasClientId && isSnowflake(canonicalGuildId) ? buildBotInviteUrl(canonicalGuildId) : undefined}
+                      href={inviteSelectedOk ? inviteUrlSelected : undefined}
                       target="_blank"
                       rel="noreferrer"
                       onClick={(e) => {
-                        if (!hasClientId || !isSnowflake(canonicalGuildId)) e.preventDefault();
-                        woc?.setMood?.("battle");
+                        if (!inviteSelectedOk) {
+                          e.preventDefault();
+                          woc?.setMood?.("omen");
+                          showToast("Invite URL invalid for selected guild.", "omen");
+                        } else {
+                          woc?.setMood?.("battle");
+                        }
                       }}
-                      title={hasClientId ? "Invite WoC to this server" : "Set NEXT_PUBLIC_DISCORD_CLIENT_ID in env and redeploy"}
+                      title={
+                        inviteSelectedOk
+                          ? "Invite WoC to this server"
+                          : "Invite URL invalid. Check NEXT_PUBLIC_DISCORD_CLIENT_ID + redeploy."
+                      }
                     >
                       Invite WoC to this server <span>➕</span>
                     </a>
@@ -1102,6 +1155,18 @@ export default function DashboardPage() {
                         Once invited, refresh this page. Gate opens automatically.
                       </div>
                     )}
+
+                    <div className="mt-3 text-[0.72rem] text-[var(--text-muted)] break-all">
+                      Client ID seen by browser:{" "}
+                      <span className="font-semibold text-[var(--text-main)]">{clientId || "(empty)"}</span>
+                      <br />
+                      Raw length: {String(clientIdRaw || "").length} | Trim length: {String(clientId || "").length}
+                      <br />
+                      Invite URL (selected):{" "}
+                      <span className="font-semibold text-[var(--text-main)]">
+                        {inviteUrlSelected || "(invite url empty)"}
+                      </span>
+                    </div>
                   </div>
                 ) : null}
               </div>
@@ -1149,19 +1214,6 @@ export default function DashboardPage() {
               </div>
             </div>
 
-<div className="mt-2 text-[0.7rem] text-[var(--text-muted)] break-all">
-  Client ID seen by browser:{" "}
-  <span className="font-semibold text-[var(--text-main)]">
-    {clientId || "(empty)"}
-  </span>
-  <br />
-  Invite URL:{" "}
-  <span className="font-semibold text-[var(--text-main)]">
-    {buildBotInviteUrl(canonicalGuildId) || "(invite url empty)"}
-  </span>
-</div>
-
-
             <div className="mt-6 woc-card p-5">
               <div className="flex flex-wrap gap-2">
                 {subnav.map(([k, label]) => (
@@ -1193,501 +1245,500 @@ export default function DashboardPage() {
                 </div>
               ) : null}
 
-{settingsLoading || !settings ? (
-  <div className="mt-4 text-sm text-[var(--text-muted)]">Loading settings…</div>
-) : (
-  <div className="mt-5">
-    {/* OVERVIEW */}
-    {subtab === "overview" ? (
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="woc-card p-4 lg:col-span-2">
-          <div className="font-semibold">Server snapshot</div>
-          <div className="text-xs text-[var(--text-muted)] mt-1">
-            Live settings in Mongo (once your API is happy).
-          </div>
+              {settingsLoading || !settings ? (
+                <div className="mt-4 text-sm text-[var(--text-muted)]">Loading settings…</div>
+              ) : (
+                <div className="mt-5">
+                  {/* OVERVIEW */}
+                  {subtab === "overview" ? (
+                    <div className="grid gap-4 lg:grid-cols-3">
+                      <div className="woc-card p-4 lg:col-span-2">
+                        <div className="font-semibold">Server snapshot</div>
+                        <div className="text-xs text-[var(--text-muted)] mt-1">
+                          Live settings in Mongo (once your API is happy).
+                        </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <div className="woc-card p-3">
-              <div className="text-xs text-[var(--text-muted)]">Prefix</div>
-              <div className="text-lg font-semibold mt-1">{settings.prefix}</div>
-            </div>
-            <div className="woc-card p-3">
-              <div className="text-xs text-[var(--text-muted)]">Welcome</div>
-              <div className="text-lg font-semibold mt-1">{settings.welcome?.enabled ? "On" : "Off"}</div>
-            </div>
-            <div className="woc-card p-3">
-              <div className="text-xs text-[var(--text-muted)]">Logs</div>
-              <div className="text-lg font-semibold mt-1">{settings.logs?.enabled ? "On" : "Off"}</div>
-            </div>
-            <div className="woc-card p-3">
-              <div className="text-xs text-[var(--text-muted)]">Mood</div>
-              <div className="text-lg font-semibold mt-1">{settings.personality?.mood}</div>
-            </div>
-          </div>
-        </div>
-
-        <div className="woc-card p-4">
-          <div className="font-semibold">WoC whisper</div>
-          <div className="text-xs text-[var(--text-muted)] mt-2">
-            “A server is a living map. Modules are the weather. Choose wisely.”
-          </div>
-          <div className="mt-3 text-[0.72rem] text-[var(--text-muted)]">
-            If status says installed=false but the bot is actually in the server, your Vercel{" "}
-            <b>DISCORD_BOT_TOKEN</b> is almost certainly pointing at a different bot.
-          </div>
-        </div>
-      </div>
-    ) : null}
-
-    {/* MODULES */}
-    {subtab === "modules" ? (
-      <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
-        <div className="woc-card p-4">
-          <div className="font-semibold">Modules</div>
-          <div className="text-xs text-[var(--text-muted)] mt-1">Pick a category on the left.</div>
-
-          <div className="mt-4 space-y-2">
-            {MODULE_TREE.map((cat) => {
-              const active = cat.key === moduleCategory;
-              const enabled = isModuleEnabled(settings.modules, cat.key);
-
-              return (
-                <button
-                  key={cat.key}
-                  type="button"
-                  onClick={() => {
-                    setModuleCategory(cat.key);
-                    setModuleSearch("");
-                    woc?.setMood?.(enabled ? "story" : "omen");
-                  }}
-                  className={cx(
-                    "w-full text-left rounded-2xl border px-3 py-3 transition",
-                    "border-[var(--border-subtle)]/70",
-                    active
-                      ? "bg-[color-mix(in_oklab,var(--accent-soft)_55%,transparent)]"
-                      : "bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] hover:bg-[color-mix(in_oklab,var(--bg-card)_85%,transparent)]"
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="font-semibold truncate">
-                        {cat.emoji} {cat.label}
+                        <div className="mt-4 grid grid-cols-2 gap-3">
+                          <div className="woc-card p-3">
+                            <div className="text-xs text-[var(--text-muted)]">Prefix</div>
+                            <div className="text-lg font-semibold mt-1">{settings.prefix}</div>
+                          </div>
+                          <div className="woc-card p-3">
+                            <div className="text-xs text-[var(--text-muted)]">Welcome</div>
+                            <div className="text-lg font-semibold mt-1">{settings.welcome?.enabled ? "On" : "Off"}</div>
+                          </div>
+                          <div className="woc-card p-3">
+                            <div className="text-xs text-[var(--text-muted)]">Logs</div>
+                            <div className="text-lg font-semibold mt-1">{settings.logs?.enabled ? "On" : "Off"}</div>
+                          </div>
+                          <div className="woc-card p-3">
+                            <div className="text-xs text-[var(--text-muted)]">Mood</div>
+                            <div className="text-lg font-semibold mt-1">{settings.personality?.mood}</div>
+                          </div>
+                        </div>
                       </div>
-                      <div className="text-[0.72rem] text-[var(--text-muted)] mt-1 truncate">{cat.desc}</div>
-                    </div>
-                    <span
-                      className={cx(
-                        "text-[0.72rem] px-2 py-1 rounded-full border",
-                        enabled
-                          ? "border-emerald-400/40 bg-emerald-500/10 text-emerald-100"
-                          : "border-amber-400/40 bg-amber-500/10 text-amber-100"
-                      )}
-                    >
-                      {enabled ? "On" : "Off"}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
 
-        <div className="woc-card p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <div className="font-semibold text-xl">
-                {activeCategory?.emoji} {activeCategory?.label}
-              </div>
-              <div className="text-xs text-[var(--text-muted)] mt-1">{activeCategory?.desc}</div>
-            </div>
-
-            <label className="inline-flex items-center gap-2">
-              <span className="text-[0.72rem] text-[var(--text-muted)]">Category</span>
-              <input
-                type="checkbox"
-                checked={isModuleEnabled(settings.modules, activeCategory.key)}
-                onChange={(e) => {
-                  setModuleEnabled(activeCategory.key, e.target.checked);
-                  woc?.setMood?.(e.target.checked ? "story" : "omen");
-                }}
-              />
-            </label>
-          </div>
-
-          <div className="mt-4">
-            <input
-              value={moduleSearch}
-              onChange={(e) => setModuleSearch(e.target.value)}
-              placeholder="Search features…"
-              className="
-                w-full px-3 py-2 rounded-2xl
-                border border-[var(--border-subtle)]/70
-                bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
-                text-[var(--text-main)]
-                outline-none
-              "
-            />
-          </div>
-
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            {filteredSubs.map((s) => {
-              const catEnabled = isModuleEnabled(settings.modules, activeCategory.key);
-              const subEnabled = isSubEnabled(settings.modules, activeCategory.key, s.key);
-
-              return (
-                <div key={s.key} className="woc-card p-4 flex flex-col justify-between">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="font-semibold truncate">{s.label}</div>
-                      <div className="text-xs text-[var(--text-muted)] mt-1">{s.desc || ""}</div>
-                      <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
-                        Key:{" "}
-                        <span className="font-semibold text-[var(--text-main)]">
-                          {activeCategory.key}.{s.key}
-                        </span>
+                      <div className="woc-card p-4">
+                        <div className="font-semibold">WoC whisper</div>
+                        <div className="text-xs text-[var(--text-muted)] mt-2">
+                          “A server is a living map. Modules are the weather. Choose wisely.”
+                        </div>
+                        <div className="mt-3 text-[0.72rem] text-[var(--text-muted)]">
+                          If status says installed=false but the bot is actually in the server, your Vercel{" "}
+                          <b>DISCORD_BOT_TOKEN</b> is almost certainly pointing at a different bot.
+                        </div>
                       </div>
                     </div>
+                  ) : null}
 
-                    <label className="inline-flex items-center gap-2">
-                      <span className="text-[0.72rem] text-[var(--text-muted)]">
-                        {subEnabled ? "On" : "Off"}
-                      </span>
-                      <input
-                        type="checkbox"
-                        checked={!!subEnabled}
-                        disabled={!catEnabled}
-                        onChange={(e) => {
-                          setSubEnabled(activeCategory.key, s.key, e.target.checked);
-                        }}
-                      />
-                    </label>
-                  </div>
+                  {/* MODULES */}
+                  {subtab === "modules" ? (
+                    <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
+                      <div className="woc-card p-4">
+                        <div className="font-semibold">Modules</div>
+                        <div className="text-xs text-[var(--text-muted)] mt-1">Pick a category on the left.</div>
 
-                  {!catEnabled ? (
-                    <div className="mt-3 text-[0.72rem] text-amber-200/90">
-                      Category is off. Enable it above to activate feature toggles.
+                        <div className="mt-4 space-y-2">
+                          {MODULE_TREE.map((cat) => {
+                            const active = cat.key === moduleCategory;
+                            const enabled = isModuleEnabled(settings.modules, cat.key);
+
+                            return (
+                              <button
+                                key={cat.key}
+                                type="button"
+                                onClick={() => {
+                                  setModuleCategory(cat.key);
+                                  setModuleSearch("");
+                                  woc?.setMood?.(enabled ? "story" : "omen");
+                                }}
+                                className={cx(
+                                  "w-full text-left rounded-2xl border px-3 py-3 transition",
+                                  "border-[var(--border-subtle)]/70",
+                                  active
+                                    ? "bg-[color-mix(in_oklab,var(--accent-soft)_55%,transparent)]"
+                                    : "bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] hover:bg-[color-mix(in_oklab,var(--bg-card)_85%,transparent)]"
+                                )}
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <div className="font-semibold truncate">
+                                      {cat.emoji} {cat.label}
+                                    </div>
+                                    <div className="text-[0.72rem] text-[var(--text-muted)] mt-1 truncate">{cat.desc}</div>
+                                  </div>
+                                  <span
+                                    className={cx(
+                                      "text-[0.72rem] px-2 py-1 rounded-full border",
+                                      enabled
+                                        ? "border-emerald-400/40 bg-emerald-500/10 text-emerald-100"
+                                        : "border-amber-400/40 bg-amber-500/10 text-amber-100"
+                                    )}
+                                  >
+                                    {enabled ? "On" : "Off"}
+                                  </span>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="woc-card p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <div className="font-semibold text-xl">
+                              {activeCategory?.emoji} {activeCategory?.label}
+                            </div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">{activeCategory?.desc}</div>
+                          </div>
+
+                          <label className="inline-flex items-center gap-2">
+                            <span className="text-[0.72rem] text-[var(--text-muted)]">Category</span>
+                            <input
+                              type="checkbox"
+                              checked={isModuleEnabled(settings.modules, activeCategory.key)}
+                              onChange={(e) => {
+                                setModuleEnabled(activeCategory.key, e.target.checked);
+                                woc?.setMood?.(e.target.checked ? "story" : "omen");
+                              }}
+                            />
+                          </label>
+                        </div>
+
+                        <div className="mt-4">
+                          <input
+                            value={moduleSearch}
+                            onChange={(e) => setModuleSearch(e.target.value)}
+                            placeholder="Search features…"
+                            className="
+                              w-full px-3 py-2 rounded-2xl
+                              border border-[var(--border-subtle)]/70
+                              bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                              text-[var(--text-main)]
+                              outline-none
+                            "
+                          />
+                        </div>
+
+                        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                          {filteredSubs.map((s) => {
+                            const catEnabled = isModuleEnabled(settings.modules, activeCategory.key);
+                            const subEnabled = isSubEnabled(settings.modules, activeCategory.key, s.key);
+
+                            return (
+                              <div key={s.key} className="woc-card p-4 flex flex-col justify-between">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <div className="font-semibold truncate">{s.label}</div>
+                                    <div className="text-xs text-[var(--text-muted)] mt-1">{s.desc || ""}</div>
+                                    <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
+                                      Key:{" "}
+                                      <span className="font-semibold text-[var(--text-main)]">
+                                        {activeCategory.key}.{s.key}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  <label className="inline-flex items-center gap-2">
+                                    <span className="text-[0.72rem] text-[var(--text-muted)]">
+                                      {subEnabled ? "On" : "Off"}
+                                    </span>
+                                    <input
+                                      type="checkbox"
+                                      checked={!!subEnabled}
+                                      disabled={!catEnabled}
+                                      onChange={(e) => {
+                                        setSubEnabled(activeCategory.key, s.key, e.target.checked);
+                                      }}
+                                    />
+                                  </label>
+                                </div>
+
+                                {!catEnabled ? (
+                                  <div className="mt-3 text-[0.72rem] text-amber-200/90">
+                                    Category is off. Enable it above to activate feature toggles.
+                                  </div>
+                                ) : null}
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        <div className="mt-4 text-[0.72rem] text-[var(--text-muted)]">
+                          This panel controls feature flags. Your bot already reads <b>settings.modules</b> in interactionCreate.
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* LOGS */}
+                  {subtab === "logs" ? (
+                    <div className="space-y-4">
+                      <SectionTitle title="Logs" subtitle="Choose where WoC writes records." />
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <label className="woc-card p-4">
+                          <div className="font-semibold text-sm">Enable logging</div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">Master switch for logs.</div>
+                          <input
+                            type="checkbox"
+                            className="mt-3"
+                            checked={!!settings.logs?.enabled}
+                            onChange={(e) => {
+                              setSettings((s) => ({ ...s, logs: { ...s.logs, enabled: e.target.checked } }));
+                              setDirty(true);
+                            }}
+                          />
+                        </label>
+
+                        <label className="woc-card p-4">
+                          <div className="font-semibold text-sm">Prefix</div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">Short, sharp, easy to type.</div>
+                          <input
+                            value={settings.prefix}
+                            onChange={(e) => {
+                              setSettings((s) => ({ ...s, prefix: e.target.value }));
+                              setDirty(true);
+                              woc?.setMood?.("playful");
+                            }}
+                            className="
+                              mt-3 w-full px-3 py-2 rounded-2xl
+                              border border-[var(--border-subtle)]/70
+                              bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                              text-[var(--text-main)]
+                              outline-none
+                            "
+                            maxLength={4}
+                            placeholder="!"
+                          />
+                        </label>
+
+                        {[
+                          ["generalChannelId", "General logs channel"],
+                          ["modlogChannelId", "Mod logs channel"],
+                          ["joinChannelId", "Join logs channel"],
+                          ["leaveChannelId", "Leave logs channel"],
+                          ["commandChannelId", "Command logs channel"],
+                          ["editChannelId", "Edit logs channel"],
+                          ["messageChannelId", "Message logs channel"],
+                          ["roleChannelId", "Role logs channel"],
+                          ["nicknameChannelId", "Nickname logs channel"],
+                        ].map(([k, label]) => (
+                          <div key={k} className="woc-card p-4">
+                            <div className="font-semibold text-sm">{label}</div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">
+                              Pick a channel. (If empty: logs for that category are effectively unrouted.)
+                            </div>
+
+                            <ChannelPicker
+                              channels={textChannels}
+                              value={settings.logs?.[k] || ""}
+                              disabled={!gateInstalled || channelsLoading}
+                              onChange={(val) => {
+                                setSettings((s) => ({ ...s, logs: { ...s.logs, [k]: val } }));
+                                setDirty(true);
+                              }}
+                              noneLabel="None"
+                            />
+
+                            {!gateInstalled ? (
+                              <div className="mt-2 text-[0.72rem] text-amber-200/90">
+                                Gate closed. Invite WoC to enable editing.
+                              </div>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* WELCOME */}
+                  {subtab === "welcome" ? (
+                    <div className="space-y-4">
+                      <SectionTitle title="Welcome" subtitle="Welcome channel + message template + autorole." />
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <label className="woc-card p-4">
+                          <div className="font-semibold text-sm">Enable welcome</div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">Turns on welcome posts.</div>
+                          <input
+                            type="checkbox"
+                            className="mt-3"
+                            checked={!!settings.welcome?.enabled}
+                            onChange={(e) => {
+                              setSettings((s) => ({ ...s, welcome: { ...s.welcome, enabled: e.target.checked } }));
+                              setDirty(true);
+                            }}
+                          />
+                        </label>
+
+                        <div className="woc-card p-4">
+                          <div className="font-semibold text-sm">Welcome channel</div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">Where the welcome message is posted.</div>
+
+                          <ChannelPicker
+                            channels={textChannels}
+                            value={settings.welcome?.channelId || ""}
+                            disabled={!gateInstalled || channelsLoading}
+                            onChange={(val) => {
+                              setSettings((s) => ({ ...s, welcome: { ...s.welcome, channelId: val } }));
+                              setDirty(true);
+                            }}
+                            allowNone={false}
+                            placeholder="Select a channel"
+                          />
+
+                          {!gateInstalled ? (
+                            <div className="mt-2 text-[0.72rem] text-amber-200/90">
+                              Gate closed. Invite WoC to enable editing.
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <label className="woc-card p-4 sm:col-span-2">
+                          <div className="font-semibold text-sm">Welcome message</div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">
+                            Tokens: <b>{"{user}"}</b>, <b>{"{server}"}</b>
+                          </div>
+                          <textarea
+                            value={settings.welcome?.message || ""}
+                            onChange={(e) => {
+                              setSettings((s) => ({ ...s, welcome: { ...s.welcome, message: e.target.value } }));
+                              setDirty(true);
+                            }}
+                            className="
+                              mt-3 w-full px-3 py-2 rounded-2xl min-h-[90px]
+                              border border-[var(--border-subtle)]/70
+                              bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                              text-[var(--text-main)]
+                              outline-none
+                            "
+                            placeholder="Welcome {user} to {server}!"
+                          />
+                        </label>
+
+                        <label className="woc-card p-4 sm:col-span-2">
+                          <div className="font-semibold text-sm">Auto role ID</div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">Optional: role to assign to new members.</div>
+                          <input
+                            value={settings.welcome?.autoRoleId || ""}
+                            onChange={(e) => {
+                              setSettings((s) => ({ ...s, welcome: { ...s.welcome, autoRoleId: e.target.value } }));
+                              setDirty(true);
+                            }}
+                            className="
+                              mt-3 w-full px-3 py-2 rounded-2xl
+                              border border-[var(--border-subtle)]/70
+                              bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                              text-[var(--text-main)]
+                              outline-none
+                            "
+                            placeholder="e.g. 123456789012345678"
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* MODERATION */}
+                  {subtab === "moderation" ? (
+                    <div className="space-y-4">
+                      <SectionTitle title="Moderation" subtitle="Toggle mod systems." />
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {[
+                          ["enabled", "Moderation enabled", "Master switch for mod commands."],
+                          ["automod", "AutoMod", "Basic filters and actions (wire rules later)."],
+                          ["antiLink", "Anti-link", "Block invite links and suspicious URLs."],
+                          ["antiSpam", "Anti-spam", "Rate limit repeated messages."],
+                        ].map(([key, label, hint]) => (
+                          <label key={key} className="woc-card p-4 flex items-start justify-between gap-3 cursor-pointer">
+                            <div>
+                              <div className="font-semibold text-sm">{label}</div>
+                              <div className="text-xs text-[var(--text-muted)] mt-1">{hint}</div>
+                            </div>
+
+                            <input
+                              type="checkbox"
+                              className="mt-1"
+                              checked={!!settings.moderation?.[key]}
+                              onChange={(e) => {
+                                setSettings((s) => ({
+                                  ...s,
+                                  moderation: { ...s.moderation, [key]: e.target.checked },
+                                }));
+                                setDirty(true);
+                                woc?.setMood?.(e.target.checked ? "battle" : "story");
+                              }}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* PERSONALITY */}
+                  {subtab === "personality" ? (
+                    <div className="space-y-4">
+                      <SectionTitle title="WoC personality" subtitle="Keep the dashboard alive, not corporate-boring." />
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <label className="woc-card p-4">
+                          <div className="font-semibold text-sm">Mood</div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">
+                            Influences dashboard vibe now (and bot responses later).
+                          </div>
+
+                          <select
+                            value={settings.personality?.mood || "story"}
+                            onChange={(e) => {
+                              const m = e.target.value;
+                              setSettings((s) => ({ ...s, personality: { ...s.personality, mood: m } }));
+                              setDirty(true);
+                              woc?.setMood?.(m);
+                              showToast(`Mood shifted: ${m}`, m);
+                            }}
+                            className="
+                              mt-3 w-full px-3 py-2 rounded-2xl
+                              border border-[var(--border-subtle)]/70
+                              bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                              text-[var(--text-main)]
+                              outline-none
+                            "
+                          >
+                            {["neutral", "battle", "playful", "story", "omen", "flustered"].map((m) => (
+                              <option key={m} value={m}>
+                                {m}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label className="woc-card p-4">
+                          <div className="font-semibold text-sm">Sass level</div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">0 = polite librarian, 100 = chaotic bard.</div>
+
+                          <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            value={Number(settings.personality?.sass ?? 35)}
+                            onChange={(e) => {
+                              setSettings((s) => ({
+                                ...s,
+                                personality: { ...s.personality, sass: Number(e.target.value) },
+                              }));
+                              setDirty(true);
+                              woc?.setMood?.("playful");
+                            }}
+                            className="mt-3 w-full"
+                          />
+
+                          <div className="mt-2 text-xs text-[var(--text-muted)]">
+                            Current:{" "}
+                            <span className="font-semibold text-[var(--text-main)]">
+                              {Number(settings.personality?.sass ?? 35)}
+                            </span>
+                          </div>
+                        </label>
+
+                        <label className="woc-card p-4 flex items-start justify-between gap-3 cursor-pointer sm:col-span-2">
+                          <div>
+                            <div className="font-semibold text-sm">Narration mode</div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">
+                              Adds story flavor to announcements/logs (later: bot output style).
+                            </div>
+                          </div>
+
+                          <input
+                            type="checkbox"
+                            className="mt-1"
+                            checked={!!settings.personality?.narration}
+                            onChange={(e) => {
+                              setSettings((s) => ({
+                                ...s,
+                                personality: { ...s.personality, narration: e.target.checked },
+                              }));
+                              setDirty(true);
+                              woc?.setMood?.(e.target.checked ? "story" : "neutral");
+                            }}
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {/* ACTION LOG */}
+                  {subtab === "actionlog" ? (
+                    <div className="space-y-3">
+                      <SectionTitle title="Action log" subtitle="Soon: admin actions, toggles changed, mod events (from bot/webhook)." />
+                      <div className="woc-card p-4 text-sm text-[var(--text-muted)]">
+                        No entries yet. The chronicle is empty… suspiciously peaceful.
+                      </div>
                     </div>
                   ) : null}
                 </div>
-              );
-            })}
-          </div>
-
-          <div className="mt-4 text-[0.72rem] text-[var(--text-muted)]">
-            This panel controls feature flags. Your bot already reads <b>settings.modules</b> in interactionCreate.
-          </div>
-        </div>
-      </div>
-    ) : null}
-
-    {/* LOGS */}
-    {subtab === "logs" ? (
-      <div className="space-y-4">
-        <SectionTitle title="Logs" subtitle="Choose where WoC writes records." />
-
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="woc-card p-4">
-            <div className="font-semibold text-sm">Enable logging</div>
-            <div className="text-xs text-[var(--text-muted)] mt-1">Master switch for logs.</div>
-            <input
-              type="checkbox"
-              className="mt-3"
-              checked={!!settings.logs?.enabled}
-              onChange={(e) => {
-                setSettings((s) => ({ ...s, logs: { ...s.logs, enabled: e.target.checked } }));
-                setDirty(true);
-              }}
-            />
-          </label>
-
-          <label className="woc-card p-4">
-            <div className="font-semibold text-sm">Prefix</div>
-            <div className="text-xs text-[var(--text-muted)] mt-1">Short, sharp, easy to type.</div>
-            <input
-              value={settings.prefix}
-              onChange={(e) => {
-                setSettings((s) => ({ ...s, prefix: e.target.value }));
-                setDirty(true);
-                woc?.setMood?.("playful");
-              }}
-              className="
-                mt-3 w-full px-3 py-2 rounded-2xl
-                border border-[var(--border-subtle)]/70
-                bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
-                text-[var(--text-main)]
-                outline-none
-              "
-              maxLength={4}
-              placeholder="!"
-            />
-          </label>
-
-          {[
-            ["generalChannelId", "General logs channel"],
-            ["modlogChannelId", "Mod logs channel"],
-            ["joinChannelId", "Join logs channel"],
-            ["leaveChannelId", "Leave logs channel"],
-            ["commandChannelId", "Command logs channel"],
-            ["editChannelId", "Edit logs channel"],
-            ["messageChannelId", "Message logs channel"],
-            ["roleChannelId", "Role logs channel"],
-            ["nicknameChannelId", "Nickname logs channel"],
-          ].map(([k, label]) => (
-            <div key={k} className="woc-card p-4">
-              <div className="font-semibold text-sm">{label}</div>
-              <div className="text-xs text-[var(--text-muted)] mt-1">
-                Pick a channel. (If empty: logs for that category are effectively unrouted.)
-              </div>
-
-              <ChannelPicker
-                channels={textChannels}
-                value={settings.logs?.[k] || ""}
-                disabled={!gateInstalled || channelsLoading}
-                onChange={(val) => {
-                  setSettings((s) => ({ ...s, logs: { ...s.logs, [k]: val } }));
-                  setDirty(true);
-                }}
-                noneLabel="None"
-              />
-
-              {!gateInstalled ? (
-                <div className="mt-2 text-[0.72rem] text-amber-200/90">
-                  Gate closed. Invite WoC to enable editing.
-                </div>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      </div>
-    ) : null}
-
-    {/* WELCOME */}
-    {subtab === "welcome" ? (
-      <div className="space-y-4">
-        <SectionTitle title="Welcome" subtitle="Welcome channel + message template + autorole." />
-
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="woc-card p-4">
-            <div className="font-semibold text-sm">Enable welcome</div>
-            <div className="text-xs text-[var(--text-muted)] mt-1">Turns on welcome posts.</div>
-            <input
-              type="checkbox"
-              className="mt-3"
-              checked={!!settings.welcome?.enabled}
-              onChange={(e) => {
-                setSettings((s) => ({ ...s, welcome: { ...s.welcome, enabled: e.target.checked } }));
-                setDirty(true);
-              }}
-            />
-          </label>
-
-          <div className="woc-card p-4">
-            <div className="font-semibold text-sm">Welcome channel</div>
-            <div className="text-xs text-[var(--text-muted)] mt-1">Where the welcome message is posted.</div>
-
-            <ChannelPicker
-              channels={textChannels}
-              value={settings.welcome?.channelId || ""}
-              disabled={!gateInstalled || channelsLoading}
-              onChange={(val) => {
-                setSettings((s) => ({ ...s, welcome: { ...s.welcome, channelId: val } }));
-                setDirty(true);
-              }}
-              allowNone={false}
-              placeholder="Select a channel"
-            />
-
-            {!gateInstalled ? (
-              <div className="mt-2 text-[0.72rem] text-amber-200/90">
-                Gate closed. Invite WoC to enable editing.
-              </div>
-            ) : null}
-          </div>
-
-          <label className="woc-card p-4 sm:col-span-2">
-            <div className="font-semibold text-sm">Welcome message</div>
-            <div className="text-xs text-[var(--text-muted)] mt-1">
-              Tokens: <b>{"{user}"}</b>, <b>{"{server}"}</b>
-            </div>
-            <textarea
-              value={settings.welcome?.message || ""}
-              onChange={(e) => {
-                setSettings((s) => ({ ...s, welcome: { ...s.welcome, message: e.target.value } }));
-                setDirty(true);
-              }}
-              className="
-                mt-3 w-full px-3 py-2 rounded-2xl min-h-[90px]
-                border border-[var(--border-subtle)]/70
-                bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
-                text-[var(--text-main)]
-                outline-none
-              "
-              placeholder="Welcome {user} to {server}!"
-            />
-          </label>
-
-          <label className="woc-card p-4 sm:col-span-2">
-            <div className="font-semibold text-sm">Auto role ID</div>
-            <div className="text-xs text-[var(--text-muted)] mt-1">Optional: role to assign to new members.</div>
-            <input
-              value={settings.welcome?.autoRoleId || ""}
-              onChange={(e) => {
-                setSettings((s) => ({ ...s, welcome: { ...s.welcome, autoRoleId: e.target.value } }));
-                setDirty(true);
-              }}
-              className="
-                mt-3 w-full px-3 py-2 rounded-2xl
-                border border-[var(--border-subtle)]/70
-                bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
-                text-[var(--text-main)]
-                outline-none
-              "
-              placeholder="e.g. 123456789012345678"
-            />
-          </label>
-        </div>
-      </div>
-    ) : null}
-
-    {/* MODERATION */}
-    {subtab === "moderation" ? (
-      <div className="space-y-4">
-        <SectionTitle title="Moderation" subtitle="Toggle mod systems." />
-        <div className="grid gap-3 sm:grid-cols-2">
-          {[
-            ["enabled", "Moderation enabled", "Master switch for mod commands."],
-            ["automod", "AutoMod", "Basic filters and actions (wire rules later)."],
-            ["antiLink", "Anti-link", "Block invite links and suspicious URLs."],
-            ["antiSpam", "Anti-spam", "Rate limit repeated messages."],
-          ].map(([key, label, hint]) => (
-            <label key={key} className="woc-card p-4 flex items-start justify-between gap-3 cursor-pointer">
-              <div>
-                <div className="font-semibold text-sm">{label}</div>
-                <div className="text-xs text-[var(--text-muted)] mt-1">{hint}</div>
-              </div>
-
-              <input
-                type="checkbox"
-                className="mt-1"
-                checked={!!settings.moderation?.[key]}
-                onChange={(e) => {
-                  setSettings((s) => ({
-                    ...s,
-                    moderation: { ...s.moderation, [key]: e.target.checked },
-                  }));
-                  setDirty(true);
-                  woc?.setMood?.(e.target.checked ? "battle" : "story");
-                }}
-              />
-            </label>
-          ))}
-        </div>
-      </div>
-    ) : null}
-
-    {/* PERSONALITY */}
-    {subtab === "personality" ? (
-      <div className="space-y-4">
-        <SectionTitle title="WoC personality" subtitle="Keep the dashboard alive, not corporate-boring." />
-
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="woc-card p-4">
-            <div className="font-semibold text-sm">Mood</div>
-            <div className="text-xs text-[var(--text-muted)] mt-1">
-              Influences dashboard vibe now (and bot responses later).
-            </div>
-
-            <select
-              value={settings.personality?.mood || "story"}
-              onChange={(e) => {
-                const m = e.target.value;
-                setSettings((s) => ({ ...s, personality: { ...s.personality, mood: m } }));
-                setDirty(true);
-                woc?.setMood?.(m);
-                showToast(`Mood shifted: ${m}`, m);
-              }}
-              className="
-                mt-3 w-full px-3 py-2 rounded-2xl
-                border border-[var(--border-subtle)]/70
-                bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
-                text-[var(--text-main)]
-                outline-none
-              "
-            >
-              {["neutral", "battle", "playful", "story", "omen", "flustered"].map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="woc-card p-4">
-            <div className="font-semibold text-sm">Sass level</div>
-            <div className="text-xs text-[var(--text-muted)] mt-1">0 = polite librarian, 100 = chaotic bard.</div>
-
-            <input
-              type="range"
-              min="0"
-              max="100"
-              value={Number(settings.personality?.sass ?? 35)}
-              onChange={(e) => {
-                setSettings((s) => ({
-                  ...s,
-                  personality: { ...s.personality, sass: Number(e.target.value) },
-                }));
-                setDirty(true);
-                woc?.setMood?.("playful");
-              }}
-              className="mt-3 w-full"
-            />
-
-            <div className="mt-2 text-xs text-[var(--text-muted)]">
-              Current:{" "}
-              <span className="font-semibold text-[var(--text-main)]">
-                {Number(settings.personality?.sass ?? 35)}
-              </span>
-            </div>
-          </label>
-
-          <label className="woc-card p-4 flex items-start justify-between gap-3 cursor-pointer sm:col-span-2">
-            <div>
-              <div className="font-semibold text-sm">Narration mode</div>
-              <div className="text-xs text-[var(--text-muted)] mt-1">
-                Adds story flavor to announcements/logs (later: bot output style).
-              </div>
-            </div>
-
-            <input
-              type="checkbox"
-              className="mt-1"
-              checked={!!settings.personality?.narration}
-              onChange={(e) => {
-                setSettings((s) => ({
-                  ...s,
-                  personality: { ...s.personality, narration: e.target.checked },
-                }));
-                setDirty(true);
-                woc?.setMood?.(e.target.checked ? "story" : "neutral");
-              }}
-            />
-          </label>
-        </div>
-      </div>
-    ) : null}
-
-    {/* ACTION LOG */}
-    {subtab === "actionlog" ? (
-      <div className="space-y-3">
-        <SectionTitle title="Action log" subtitle="Soon: admin actions, toggles changed, mod events (from bot/webhook)." />
-        <div className="woc-card p-4 text-sm text-[var(--text-muted)]">
-          No entries yet. The chronicle is empty… suspiciously peaceful.
-        </div>
-      </div>
-    ) : null}
-  </div>
-)}
-
+              )}
             </div>
           </>
         )}
