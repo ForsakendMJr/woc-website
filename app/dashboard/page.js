@@ -39,7 +39,7 @@ function safeDel(key) {
   } catch {}
 }
 
-// Discord snowflake guard (prevents "undefined" / junk from ever being used)
+// Discord snowflake guard
 function isSnowflake(id) {
   const s = String(id || "").trim();
   if (!s) return false;
@@ -53,6 +53,24 @@ function deepClone(obj) {
     if (typeof structuredClone === "function") return structuredClone(obj);
   } catch {}
   return JSON.parse(JSON.stringify(obj));
+}
+
+// Deep merge defaults without overwriting explicit values
+function deepMergeDefaults(existing, defaults) {
+  const out =
+    existing && typeof existing === "object" && !Array.isArray(existing) ? deepClone(existing) : {};
+  const def =
+    defaults && typeof defaults === "object" && !Array.isArray(defaults) ? defaults : {};
+
+  for (const [k, v] of Object.entries(def)) {
+    const cur = out[k];
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      out[k] = deepMergeDefaults(cur, v);
+    } else if (cur === undefined || cur === null) {
+      out[k] = v;
+    }
+  }
+  return out;
 }
 
 function safeErrorMessage(input) {
@@ -71,7 +89,6 @@ async function fetchJson(url, opts = {}) {
   const res = await fetch(url, opts);
   const ct = (res.headers.get("content-type") || "").toLowerCase();
 
-  // If backend crashes or route missing, Next often returns HTML.
   if (!ct.includes("application/json")) {
     const txt = await res.text().catch(() => "");
     const e = new Error(safeErrorMessage(txt || `Non-JSON response (${res.status})`));
@@ -107,7 +124,12 @@ function Pill({ tone = "default", children }) {
     bad: "border-rose-400/40 bg-rose-500/10 text-rose-100",
   };
   return (
-    <span className={cx("text-[0.72rem] px-2 py-1 rounded-full border", tones[tone] || tones.default)}>
+    <span
+      className={cx(
+        "text-[0.72rem] px-2 py-1 rounded-full border",
+        tones[tone] || tones.default
+      )}
+    >
       {children}
     </span>
   );
@@ -118,7 +140,9 @@ function SectionTitle({ title, subtitle, right }) {
     <div className="flex items-start justify-between gap-3">
       <div>
         <div className="font-semibold">{title}</div>
-        {subtitle ? <div className="text-xs text-[var(--text-muted)] mt-1">{subtitle}</div> : null}
+        {subtitle ? (
+          <div className="text-xs text-[var(--text-muted)] mt-1">{subtitle}</div>
+        ) : null}
       </div>
       {right ? <div>{right}</div> : null}
     </div>
@@ -144,7 +168,11 @@ function IconCircle({ guild, size = 40 }) {
     >
       {url ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={url} alt={guild?.name || "Server icon"} className="w-full h-full object-cover" />
+        <img
+          src={url}
+          alt={guild?.name || "Server icon"}
+          className="w-full h-full object-cover"
+        />
       ) : (
         <span className="text-xs font-semibold text-[var(--text-muted)]">{label}</span>
       )}
@@ -189,7 +217,9 @@ function GuildPicker({ guilds, value, onChange, disabled }) {
         <div className="flex items-center gap-3 min-w-0">
           <IconCircle guild={selected} size={34} />
           <div className="min-w-0 text-left">
-            <div className="text-sm font-semibold truncate">{selected?.name || "Select a server"}</div>
+            <div className="text-sm font-semibold truncate">
+              {selected?.name || "Select a server"}
+            </div>
             <div className="text-[0.72rem] text-[var(--text-muted)] truncate">
               {selected?.role ? `${selected.role}` : guilds.length ? "—" : "No servers"}
             </div>
@@ -221,18 +251,24 @@ function GuildPicker({ guilds, value, onChange, disabled }) {
                 className={cx(
                   "w-full px-3 py-2 flex items-center gap-3 text-left",
                   "hover:bg-[color-mix(in_oklab,var(--bg-card)_85%,transparent)]",
-                  active ? "bg-[color-mix(in_oklab,var(--accent-soft)_45%,transparent)]" : ""
+                  active
+                    ? "bg-[color-mix(in_oklab,var(--accent-soft)_45%,transparent)]"
+                    : ""
                 )}
               >
                 <IconCircle guild={g} size={34} />
                 <div className="min-w-0">
                   <div className="text-sm font-semibold truncate">{g.name}</div>
-                  <div className="text-[0.72rem] text-[var(--text-muted)] truncate">{g.role || "Manager"}</div>
+                  <div className="text-[0.72rem] text-[var(--text-muted)] truncate">
+                    {g.role || "Manager"}
+                  </div>
                 </div>
               </button>
             );
           })}
-          {!guilds.length ? <div className="px-3 py-3 text-sm text-[var(--text-muted)]">No servers found.</div> : null}
+          {!guilds.length ? (
+            <div className="px-3 py-3 text-sm text-[var(--text-muted)]">No servers found.</div>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -474,7 +510,8 @@ function buildDefaultModulesFromTree(tree) {
  * Merge defaults in WITHOUT overwriting explicit false values.
  */
 function mergeModuleDefaults(existingModules, defaultModules) {
-  const out = existingModules && typeof existingModules === "object" ? deepClone(existingModules) : {};
+  const out =
+    existingModules && typeof existingModules === "object" ? deepClone(existingModules) : {};
 
   for (const [catKey, defCat] of Object.entries(defaultModules || {})) {
     if (!out[catKey] || typeof out[catKey] !== "object") out[catKey] = {};
@@ -500,6 +537,28 @@ function isSubEnabled(modules, catKey, subKey) {
 
 function ensureDefaultSettings(guildId) {
   const defaultModules = buildDefaultModulesFromTree(MODULE_TREE);
+
+  // ✅ Dyno-like welcome defaults
+  const welcomeDefaults = {
+    enabled: false,
+    channelId: "",
+    dmEnabled: false,
+    message: "Welcome {user} to **{server}**! ✨",
+    autoRoleId: "",
+    mode: "message", // message | embed | both
+    embed: {
+      color: "#7c3aed",
+      title: "",
+      url: "",
+      description: "Welcome {user} to **{server}**! ✨",
+      author: { name: "", iconUrl: "", url: "" },
+      thumbnailUrl: "{avatar}",
+      imageUrl: "",
+      footer: { text: "", iconUrl: "" },
+      fields: [],
+    },
+  };
+
   return {
     guildId,
     prefix: "!",
@@ -516,15 +575,22 @@ function ensureDefaultSettings(guildId) {
       commandChannelId: "",
       editChannelId: "",
     },
-    welcome: {
-      enabled: false,
-      channelId: "",
-      message: "Welcome {user} to **{server}**! ✨",
-      autoRoleId: "",
-    },
+    welcome: welcomeDefaults,
     modules: defaultModules,
     personality: { mood: "story", sass: 35, narration: true },
   };
+}
+
+function clampFields(fields) {
+  const list = Array.isArray(fields) ? fields : [];
+  return list
+    .map((f) => ({
+      name: String(f?.name ?? "").slice(0, 256),
+      value: String(f?.value ?? "").slice(0, 1024),
+      inline: !!f?.inline,
+    }))
+    .filter((f) => f.name || f.value)
+    .slice(0, 25);
 }
 
 export default function DashboardPage() {
@@ -601,7 +667,7 @@ export default function DashboardPage() {
   const clientId = String(clientIdRaw || "").trim();
   const hasClientId = isSnowflake(clientId);
 
-  // ✅ FIX: always build a FULL absolute Discord URL, and include integration_type=0.
+  // Always build a FULL absolute Discord URL, include integration_type=0
   function buildBotInviteUrl(gid) {
     if (!hasClientId) return "";
 
@@ -740,10 +806,25 @@ export default function DashboardPage() {
         const incoming = data?.settings && typeof data.settings === "object" ? data.settings : null;
         const base = incoming || ensureDefaultSettings(canonicalGuildId);
 
+        // Merge module defaults
         const defaults = buildDefaultModulesFromTree(MODULE_TREE);
         const mergedModules = mergeModuleDefaults(base.modules, defaults);
 
-        setSettings({ ...base, guildId: canonicalGuildId, modules: mergedModules });
+        // Merge welcome defaults (Dyno-like)
+        const welcomeDefaults = ensureDefaultSettings(canonicalGuildId).welcome;
+        const mergedWelcome = deepMergeDefaults(base.welcome, welcomeDefaults);
+        mergedWelcome.embed ||= {};
+        mergedWelcome.embed.fields = clampFields(mergedWelcome.embed.fields);
+
+        setSettings({
+          ...base,
+          guildId: canonicalGuildId,
+          modules: mergedModules,
+          welcome: mergedWelcome,
+          logs: deepMergeDefaults(base.logs, ensureDefaultSettings(canonicalGuildId).logs),
+          moderation: deepMergeDefaults(base.moderation, ensureDefaultSettings(canonicalGuildId).moderation),
+          personality: deepMergeDefaults(base.personality, ensureDefaultSettings(canonicalGuildId).personality),
+        });
       } catch (e) {
         if (e?.name === "AbortError") return;
         setSettings(ensureDefaultSettings(canonicalGuildId));
@@ -792,6 +873,7 @@ export default function DashboardPage() {
     if (!authed) return;
     if (!isSnowflake(canonicalGuildId)) return;
 
+    // If gate closed, we do not need channels (dashboard locked)
     if (install.installed === false) {
       setChannelsLoading(false);
       setChannels([]);
@@ -830,7 +912,15 @@ export default function DashboardPage() {
     const defaults = buildDefaultModulesFromTree(MODULE_TREE);
     const safeSettings = deepClone(settings);
     safeSettings.guildId = canonicalGuildId;
+
+    // Ensure modules always have defaults
     safeSettings.modules = mergeModuleDefaults(safeSettings.modules, defaults);
+
+    // Ensure welcome defaults exist + clamp fields
+    const welcomeDefaults = ensureDefaultSettings(canonicalGuildId).welcome;
+    safeSettings.welcome = deepMergeDefaults(safeSettings.welcome, welcomeDefaults);
+    safeSettings.welcome.embed ||= {};
+    safeSettings.welcome.embed.fields = clampFields(safeSettings.welcome.embed.fields);
 
     setSettingsLoading(true);
     try {
@@ -840,10 +930,22 @@ export default function DashboardPage() {
         body: JSON.stringify({ settings: safeSettings }),
       });
 
-      const incoming = data?.settings && typeof data.settings === "object" ? data.settings : safeSettings;
+      const incoming =
+        data?.settings && typeof data.settings === "object" ? data.settings : safeSettings;
+
       const mergedModules = mergeModuleDefaults(incoming.modules, defaults);
 
-      setSettings({ ...incoming, guildId: canonicalGuildId, modules: mergedModules });
+      const mergedWelcome = deepMergeDefaults(incoming.welcome, welcomeDefaults);
+      mergedWelcome.embed ||= {};
+      mergedWelcome.embed.fields = clampFields(mergedWelcome.embed.fields);
+
+      setSettings({
+        ...incoming,
+        guildId: canonicalGuildId,
+        modules: mergedModules,
+        welcome: mergedWelcome,
+      });
+
       setDirty(false);
       showToast("Settings sealed. ✅", "playful");
     } catch (e) {
@@ -854,9 +956,6 @@ export default function DashboardPage() {
   }
 
   const gateInstalled = install.installed === true;
-
-  // 🔒 Lock browsing if not installed (only show invite gate)
-  const gateLocked = install.installed === false;
 
   const mood = woc?.mood || "story";
   const moodWhisper =
@@ -891,7 +990,8 @@ export default function DashboardPage() {
     if (!q) return subs;
     return subs.filter(
       (s) =>
-        (s.label + " " + (s.desc || "")).toLowerCase().includes(q) || s.key.toLowerCase().includes(q)
+        (s.label + " " + (s.desc || "")).toLowerCase().includes(q) ||
+        s.key.toLowerCase().includes(q)
     );
   }, [activeCategory, moduleSearch]);
 
@@ -918,8 +1018,6 @@ export default function DashboardPage() {
     setDirty(true);
   }
 
-  const showNoticePill = !!(guildWarn || install.warning || channelsWarn);
-
   const textChannels = useMemo(() => {
     const list = Array.isArray(channels) ? channels : [];
     return list.filter((c) => {
@@ -934,8 +1032,18 @@ export default function DashboardPage() {
     });
   }, [channels]);
 
-  const debugStatusUrl = isSnowflake(canonicalGuildId) ? `${STATUS_ENDPOINT(canonicalGuildId)}` : "";
-  const debugChannelsUrl = isSnowflake(canonicalGuildId) ? `${CHANNELS_ENDPOINT(canonicalGuildId)}` : "";
+  const tokensHelp = (
+    <div className="text-[0.72rem] text-[var(--text-muted)]">
+      Tokens: <b>{"{user}"}</b>, <b>{"{server}"}</b>, <b>{"{username}"}</b>, <b>{"{tag}"}</b>,{" "}
+      <b>{"{membercount}"}</b>, <b>{"{id}"}</b>, <b>{"{avatar}"}</b>
+    </div>
+  );
+
+  const welcomeMode = String(settings?.welcome?.mode || "message").toLowerCase();
+  const effectiveMode = ["message", "embed", "both"].includes(welcomeMode) ? welcomeMode : "message";
+  const showEmbedEditor = effectiveMode === "embed" || effectiveMode === "both";
+
+  const showNoticePill = !!(guildWarn || install.warning || channelsWarn);
 
   return (
     <div className="max-w-7xl mx-auto px-6 lg:px-10 py-12">
@@ -1052,17 +1160,6 @@ export default function DashboardPage() {
                   />
                 </div>
 
-                {process.env.NODE_ENV !== "production" && isSnowflake(canonicalGuildId) ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <a className="woc-btn-ghost text-xs" href={debugStatusUrl} target="_blank" rel="noreferrer">
-                      Open status JSON
-                    </a>
-                    <a className="woc-btn-ghost text-xs" href={debugChannelsUrl} target="_blank" rel="noreferrer">
-                      Open channels JSON
-                    </a>
-                  </div>
-                ) : null}
-
                 {install.warning ? (
                   <div className="mt-4 text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
                     <div className="font-semibold">Gate notice</div>
@@ -1070,19 +1167,19 @@ export default function DashboardPage() {
                   </div>
                 ) : null}
 
-                {channelsWarn && isSnowflake(canonicalGuildId) ? (
+                {channelsWarn && isSnowflake(canonicalGuildId) && gateInstalled ? (
                   <div className="mt-4 text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
                     <div className="font-semibold">Channel list notice</div>
                     <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{channelsWarn}</div>
                   </div>
                 ) : null}
 
-                {/* 🔒 When bot is NOT installed: show ONLY invite gate, no debug block */}
                 {install.installed === false ? (
                   <div className="mt-4 woc-card p-4">
                     <div className="text-sm font-semibold">Invite gate</div>
                     <div className="text-xs text-[var(--text-muted)] mt-1">
-                      Invite the bot to <b>{selectedGuild?.name}</b> to unlock the dashboard controls.
+                      WoC can’t manage what it can’t see. Invite the bot to{" "}
+                      <b>{selectedGuild?.name}</b> to unlock controls.
                     </div>
 
                     <a
@@ -1108,7 +1205,7 @@ export default function DashboardPage() {
                       </div>
                     ) : (
                       <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
-                        After inviting, refresh this page. The gate opens automatically.
+                        Once invited, refresh this page. Gate opens automatically.
                       </div>
                     )}
                   </div>
@@ -1145,12 +1242,17 @@ export default function DashboardPage() {
                       ? dirty
                         ? "WoC is watching. Commit the ritual."
                         : "All quiet. No edits pending."
-                      : "Gate closed. Invite WoC to enable editing."}
+                      : "Invite WoC to unlock the full dashboard."}
                   </div>
 
                   <div className="mt-2 text-[0.7rem] text-[var(--text-muted)]">
                     Selected guildId:{" "}
-                    <span className={cx("font-semibold", isSnowflake(canonicalGuildId) ? "text-emerald-200" : "text-amber-200")}>
+                    <span
+                      className={cx(
+                        "font-semibold",
+                        isSnowflake(canonicalGuildId) ? "text-emerald-200" : "text-amber-200"
+                      )}
+                    >
                       {canonicalGuildId || "(none)"}
                     </span>
                   </div>
@@ -1158,9 +1260,47 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            {/* 🔒 If not installed: do NOT show tabs/panels at all */}
-            {gateLocked ? null : (
+            {/* ✅ NEW: if bot not installed, NO tabs, NO browsing */}
+            {!gateInstalled ? (
+              <div className="mt-6 woc-card p-6">
+                <div className="flex items-start justify-between gap-4 flex-wrap">
+                  <div>
+                    <div className="text-lg font-semibold">Dashboard locked 🔒</div>
+                    <div className="mt-1 text-sm text-[var(--text-muted)] max-w-3xl">
+                      Invite WoC to this server to unlock Modules, Logs, Welcome builder, Moderation toggles, and personality.
+                    </div>
+                    <div className="mt-3 text-[0.72rem] text-[var(--text-muted)]">
+                      This keeps the UI clean (no browsing panels that cannot apply yet).
+                    </div>
+                  </div>
+
+                  <a
+                    className={cx(
+                      "inline-flex items-center gap-2 woc-btn-primary",
+                      !hasClientId || !isSnowflake(canonicalGuildId) ? "opacity-60 cursor-not-allowed" : ""
+                    )}
+                    href={hasClientId && isSnowflake(canonicalGuildId) ? buildBotInviteUrl(canonicalGuildId) : undefined}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={(e) => {
+                      if (!hasClientId || !isSnowflake(canonicalGuildId)) e.preventDefault();
+                      woc?.setMood?.("battle");
+                    }}
+                    title={hasClientId ? "Invite WoC to this server" : "Set NEXT_PUBLIC_DISCORD_CLIENT_ID in env and redeploy"}
+                  >
+                    Invite WoC to unlock <span>➕</span>
+                  </a>
+                </div>
+
+                {install.installed === false && selectedGuild?.name ? (
+                  <div className="mt-4 text-xs text-[var(--text-muted)]">
+                    Server: <span className="font-semibold text-[var(--text-main)]">{selectedGuild.name}</span>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
               <div className="mt-6 woc-card p-5">
+                {/* Tabs */}
                 <div className="flex flex-wrap gap-2">
                   {subnav.map(([k, label]) => (
                     <button
@@ -1202,11 +1342,15 @@ export default function DashboardPage() {
                             </div>
                             <div className="woc-card p-3">
                               <div className="text-xs text-[var(--text-muted)]">Welcome</div>
-                              <div className="text-lg font-semibold mt-1">{settings.welcome?.enabled ? "On" : "Off"}</div>
+                              <div className="text-lg font-semibold mt-1">
+                                {settings.welcome?.enabled ? "On" : "Off"}
+                              </div>
                             </div>
                             <div className="woc-card p-3">
                               <div className="text-xs text-[var(--text-muted)]">Logs</div>
-                              <div className="text-lg font-semibold mt-1">{settings.logs?.enabled ? "On" : "Off"}</div>
+                              <div className="text-lg font-semibold mt-1">
+                                {settings.logs?.enabled ? "On" : "Off"}
+                              </div>
                             </div>
                             <div className="woc-card p-3">
                               <div className="text-xs text-[var(--text-muted)]">Mood</div>
@@ -1220,6 +1364,10 @@ export default function DashboardPage() {
                           <div className="text-xs text-[var(--text-muted)] mt-2">
                             “A server is a living map. Modules are the weather. Choose wisely.”
                           </div>
+                          <div className="mt-3 text-[0.72rem] text-[var(--text-muted)]">
+                            If status says installed=false but the bot is actually in the server, your Vercel{" "}
+                            <b>DISCORD_BOT_TOKEN</b> is almost certainly pointing at a different bot.
+                          </div>
                         </div>
                       </div>
                     ) : null}
@@ -1229,7 +1377,9 @@ export default function DashboardPage() {
                       <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
                         <div className="woc-card p-4">
                           <div className="font-semibold">Modules</div>
-                          <div className="text-xs text-[var(--text-muted)] mt-1">Pick a category on the left.</div>
+                          <div className="text-xs text-[var(--text-muted)] mt-1">
+                            Pick a category on the left.
+                          </div>
 
                           <div className="mt-4 space-y-2">
                             {MODULE_TREE.map((cat) => {
@@ -1258,7 +1408,9 @@ export default function DashboardPage() {
                                       <div className="font-semibold truncate">
                                         {cat.emoji} {cat.label}
                                       </div>
-                                      <div className="text-[0.72rem] text-[var(--text-muted)] mt-1 truncate">{cat.desc}</div>
+                                      <div className="text-[0.72rem] text-[var(--text-muted)] mt-1 truncate">
+                                        {cat.desc}
+                                      </div>
                                     </div>
                                     <span
                                       className={cx(
@@ -1283,7 +1435,9 @@ export default function DashboardPage() {
                               <div className="font-semibold text-xl">
                                 {activeCategory?.emoji} {activeCategory?.label}
                               </div>
-                              <div className="text-xs text-[var(--text-muted)] mt-1">{activeCategory?.desc}</div>
+                              <div className="text-xs text-[var(--text-muted)] mt-1">
+                                {activeCategory?.desc}
+                              </div>
                             </div>
 
                             <label className="inline-flex items-center gap-2">
@@ -1324,7 +1478,9 @@ export default function DashboardPage() {
                                   <div className="flex items-start justify-between gap-3">
                                     <div className="min-w-0">
                                       <div className="font-semibold truncate">{s.label}</div>
-                                      <div className="text-xs text-[var(--text-muted)] mt-1">{s.desc || ""}</div>
+                                      <div className="text-xs text-[var(--text-muted)] mt-1">
+                                        {s.desc || ""}
+                                      </div>
                                       <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
                                         Key:{" "}
                                         <span className="font-semibold text-[var(--text-main)]">
@@ -1334,7 +1490,9 @@ export default function DashboardPage() {
                                     </div>
 
                                     <label className="inline-flex items-center gap-2">
-                                      <span className="text-[0.72rem] text-[var(--text-muted)]">{subEnabled ? "On" : "Off"}</span>
+                                      <span className="text-[0.72rem] text-[var(--text-muted)]">
+                                        {subEnabled ? "On" : "Off"}
+                                      </span>
                                       <input
                                         type="checkbox"
                                         checked={!!subEnabled}
@@ -1357,7 +1515,7 @@ export default function DashboardPage() {
                           </div>
 
                           <div className="mt-4 text-[0.72rem] text-[var(--text-muted)]">
-                            This panel controls feature flags. Your bot already reads <b>settings.modules</b> in interactionCreate.
+                            This panel controls feature flags. Your bot reads <b>settings.modules</b>.
                           </div>
                         </div>
                       </div>
@@ -1371,7 +1529,9 @@ export default function DashboardPage() {
                         <div className="grid gap-3 sm:grid-cols-2">
                           <label className="woc-card p-4">
                             <div className="font-semibold text-sm">Enable logging</div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">Master switch for logs.</div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">
+                              Master switch for logs.
+                            </div>
                             <input
                               type="checkbox"
                               className="mt-3"
@@ -1385,7 +1545,9 @@ export default function DashboardPage() {
 
                           <label className="woc-card p-4">
                             <div className="font-semibold text-sm">Prefix</div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">Short, sharp, easy to type.</div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">
+                              Short, sharp, easy to type.
+                            </div>
                             <input
                               value={settings.prefix}
                               onChange={(e) => {
@@ -1419,13 +1581,13 @@ export default function DashboardPage() {
                             <div key={k} className="woc-card p-4">
                               <div className="font-semibold text-sm">{label}</div>
                               <div className="text-xs text-[var(--text-muted)] mt-1">
-                                Pick a channel. (If empty: logs for that category are effectively unrouted.)
+                                Pick a channel. (If empty: logs for that category are unrouted.)
                               </div>
 
                               <ChannelPicker
                                 channels={textChannels}
                                 value={settings.logs?.[k] || ""}
-                                disabled={!gateInstalled || channelsLoading}
+                                disabled={channelsLoading}
                                 onChange={(val) => {
                                   setSettings((s) => ({ ...s, logs: { ...s.logs, [k]: val } }));
                                   setDirty(true);
@@ -1438,36 +1600,106 @@ export default function DashboardPage() {
                       </div>
                     ) : null}
 
-                    {/* WELCOME */}
+                    {/* ✅ WELCOME (Dyno-like builder) */}
                     {subtab === "welcome" ? (
                       <div className="space-y-4">
-                        <SectionTitle title="Welcome" subtitle="Welcome channel + message template + autorole." />
+                        <SectionTitle
+                          title="Welcome"
+                          subtitle="Welcome channel + message template + autorole + embed builder."
+                        />
 
-                        <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="grid gap-3 lg:grid-cols-2">
                           <label className="woc-card p-4">
                             <div className="font-semibold text-sm">Enable welcome</div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">Turns on welcome posts.</div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">
+                              Turns on welcome posts.
+                            </div>
                             <input
                               type="checkbox"
                               className="mt-3"
                               checked={!!settings.welcome?.enabled}
                               onChange={(e) => {
-                                setSettings((s) => ({ ...s, welcome: { ...s.welcome, enabled: e.target.checked } }));
+                                setSettings((s) => ({
+                                  ...s,
+                                  welcome: { ...s.welcome, enabled: e.target.checked },
+                                }));
                                 setDirty(true);
                               }}
                             />
                           </label>
 
+                          <label className="woc-card p-4">
+                            <div className="font-semibold text-sm">Send welcome DM</div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">
+                              Optional DM to the new member (best-effort).
+                            </div>
+                            <input
+                              type="checkbox"
+                              className="mt-3"
+                              checked={!!settings.welcome?.dmEnabled}
+                              onChange={(e) => {
+                                setSettings((s) => ({
+                                  ...s,
+                                  welcome: { ...s.welcome, dmEnabled: e.target.checked },
+                                }));
+                                setDirty(true);
+                              }}
+                            />
+                          </label>
+
+                          <div className="woc-card p-4 lg:col-span-2">
+                            <div className="font-semibold text-sm">Message type</div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">
+                              Choose how the welcome is sent.
+                            </div>
+
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {[
+                                ["message", "Message"],
+                                ["embed", "Embed"],
+                                ["both", "Embed + text"],
+                              ].map(([k, label]) => (
+                                <button
+                                  key={k}
+                                  type="button"
+                                  className={cx(
+                                    "text-xs px-3 py-2 rounded-full border transition",
+                                    "border-[var(--border-subtle)]/70",
+                                    effectiveMode === k
+                                      ? "bg-[color-mix(in_oklab,var(--accent-soft)_55%,transparent)]"
+                                      : "bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] hover:bg-[color-mix(in_oklab,var(--bg-card)_85%,transparent)]"
+                                  )}
+                                  onClick={() => {
+                                    setSettings((s) => ({
+                                      ...s,
+                                      welcome: { ...(s.welcome || {}), mode: k },
+                                    }));
+                                    setDirty(true);
+                                  }}
+                                >
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
+
+                            <div className="mt-3">{tokensHelp}</div>
+                          </div>
+
                           <div className="woc-card p-4">
                             <div className="font-semibold text-sm">Welcome channel</div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">Where the welcome message is posted.</div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">
+                              Where the welcome is posted.
+                            </div>
 
                             <ChannelPicker
                               channels={textChannels}
                               value={settings.welcome?.channelId || ""}
-                              disabled={!gateInstalled || channelsLoading}
+                              disabled={channelsLoading}
                               onChange={(val) => {
-                                setSettings((s) => ({ ...s, welcome: { ...s.welcome, channelId: val } }));
+                                setSettings((s) => ({
+                                  ...s,
+                                  welcome: { ...s.welcome, channelId: val },
+                                }));
                                 setDirty(true);
                               }}
                               allowNone={false}
@@ -1475,35 +1707,18 @@ export default function DashboardPage() {
                             />
                           </div>
 
-                          <label className="woc-card p-4 sm:col-span-2">
-                            <div className="font-semibold text-sm">Welcome message</div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">
-                              Tokens: <b>{"{user}"}</b>, <b>{"{server}"}</b>
-                            </div>
-                            <textarea
-                              value={settings.welcome?.message || ""}
-                              onChange={(e) => {
-                                setSettings((s) => ({ ...s, welcome: { ...s.welcome, message: e.target.value } }));
-                                setDirty(true);
-                              }}
-                              className="
-                                mt-3 w-full px-3 py-2 rounded-2xl min-h-[90px]
-                                border border-[var(--border-subtle)]/70
-                                bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
-                                text-[var(--text-main)]
-                                outline-none
-                              "
-                              placeholder="Welcome {user} to {server}!"
-                            />
-                          </label>
-
-                          <label className="woc-card p-4 sm:col-span-2">
+                          <label className="woc-card p-4">
                             <div className="font-semibold text-sm">Auto role ID</div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">Optional: role to assign to new members.</div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">
+                              Optional: role to assign to new members.
+                            </div>
                             <input
                               value={settings.welcome?.autoRoleId || ""}
                               onChange={(e) => {
-                                setSettings((s) => ({ ...s, welcome: { ...s.welcome, autoRoleId: e.target.value } }));
+                                setSettings((s) => ({
+                                  ...s,
+                                  welcome: { ...s.welcome, autoRoleId: e.target.value },
+                                }));
                                 setDirty(true);
                               }}
                               className="
@@ -1516,6 +1731,517 @@ export default function DashboardPage() {
                               placeholder="e.g. 123456789012345678"
                             />
                           </label>
+
+                          {/* Text message template */}
+                          <label className="woc-card p-4 lg:col-span-2">
+                            <div className="font-semibold text-sm">Welcome text</div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">
+                              Used for Message and Embed + text modes.
+                            </div>
+
+                            <textarea
+                              value={settings.welcome?.message || ""}
+                              onChange={(e) => {
+                                setSettings((s) => ({
+                                  ...s,
+                                  welcome: { ...s.welcome, message: e.target.value },
+                                }));
+                                setDirty(true);
+                              }}
+                              className="
+                                mt-3 w-full px-3 py-2 rounded-2xl min-h-[90px]
+                                border border-[var(--border-subtle)]/70
+                                bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                                text-[var(--text-main)]
+                                outline-none
+                              "
+                              placeholder="Welcome {user} to **{server}**! ✨"
+                            />
+                          </label>
+
+                          {/* Embed builder */}
+                          {showEmbedEditor ? (
+                            <div className="woc-card p-4 lg:col-span-2">
+                              <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                  <div className="font-semibold text-sm">Embed builder</div>
+                                  <div className="text-xs text-[var(--text-muted)] mt-1">
+                                    Dyno-style embed knobs. Tokens work here too.
+                                  </div>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  className="woc-btn-ghost text-xs"
+                                  onClick={() => {
+                                    const def = ensureDefaultSettings(canonicalGuildId).welcome;
+                                    setSettings((s) => ({
+                                      ...s,
+                                      welcome: deepMergeDefaults(def, s.welcome),
+                                    }));
+                                    setDirty(true);
+                                    showToast("Embed defaults restored.", "playful");
+                                  }}
+                                >
+                                  Restore defaults
+                                </button>
+                              </div>
+
+                              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                                <label className="woc-card p-4">
+                                  <div className="font-semibold text-sm">Color</div>
+                                  <div className="text-xs text-[var(--text-muted)] mt-1">
+                                    Hex like #7c3aed (or a decimal number).
+                                  </div>
+                                  <input
+                                    value={settings.welcome?.embed?.color ?? ""}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: {
+                                          ...s.welcome,
+                                          embed: { ...(s.welcome?.embed || {}), color: e.target.value },
+                                        },
+                                      }));
+                                      setDirty(true);
+                                    }}
+                                    className="
+                                      mt-3 w-full px-3 py-2 rounded-2xl
+                                      border border-[var(--border-subtle)]/70
+                                      bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                                      text-[var(--text-main)]
+                                      outline-none
+                                    "
+                                    placeholder="#7c3aed"
+                                  />
+                                </label>
+
+                                <label className="woc-card p-4">
+                                  <div className="font-semibold text-sm">Title</div>
+                                  <div className="text-xs text-[var(--text-muted)] mt-1">Optional.</div>
+                                  <input
+                                    value={settings.welcome?.embed?.title || ""}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: {
+                                          ...s.welcome,
+                                          embed: { ...(s.welcome?.embed || {}), title: e.target.value },
+                                        },
+                                      }));
+                                      setDirty(true);
+                                    }}
+                                    className="
+                                      mt-3 w-full px-3 py-2 rounded-2xl
+                                      border border-[var(--border-subtle)]/70
+                                      bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                                      text-[var(--text-main)]
+                                      outline-none
+                                    "
+                                    placeholder="Welcome!"
+                                  />
+                                </label>
+
+                                <label className="woc-card p-4 sm:col-span-2">
+                                  <div className="font-semibold text-sm">Title URL</div>
+                                  <div className="text-xs text-[var(--text-muted)] mt-1">
+                                    Makes the title clickable (optional).
+                                  </div>
+                                  <input
+                                    value={settings.welcome?.embed?.url || ""}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: {
+                                          ...s.welcome,
+                                          embed: { ...(s.welcome?.embed || {}), url: e.target.value },
+                                        },
+                                      }));
+                                      setDirty(true);
+                                    }}
+                                    className="
+                                      mt-3 w-full px-3 py-2 rounded-2xl
+                                      border border-[var(--border-subtle)]/70
+                                      bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                                      text-[var(--text-main)]
+                                      outline-none
+                                    "
+                                    placeholder="https://example.com"
+                                  />
+                                </label>
+
+                                <label className="woc-card p-4 sm:col-span-2">
+                                  <div className="font-semibold text-sm">Description</div>
+                                  <div className="text-xs text-[var(--text-muted)] mt-1">
+                                    The main embed body.
+                                  </div>
+                                  <textarea
+                                    value={settings.welcome?.embed?.description || ""}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: {
+                                          ...s.welcome,
+                                          embed: { ...(s.welcome?.embed || {}), description: e.target.value },
+                                        },
+                                      }));
+                                      setDirty(true);
+                                    }}
+                                    className="
+                                      mt-3 w-full px-3 py-2 rounded-2xl min-h-[110px]
+                                      border border-[var(--border-subtle)]/70
+                                      bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                                      text-[var(--text-main)]
+                                      outline-none
+                                    "
+                                    placeholder="Welcome {user} to **{server}**!"
+                                  />
+                                </label>
+
+                                <div className="woc-card p-4 sm:col-span-2">
+                                  <div className="font-semibold text-sm">Author</div>
+                                  <div className="text-xs text-[var(--text-muted)] mt-1">
+                                    Optional author line at the top.
+                                  </div>
+
+                                  <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                                    <input
+                                      value={settings.welcome?.embed?.author?.name || ""}
+                                      onChange={(e) => {
+                                        setSettings((s) => ({
+                                          ...s,
+                                          welcome: {
+                                            ...s.welcome,
+                                            embed: {
+                                              ...(s.welcome?.embed || {}),
+                                              author: { ...(s.welcome?.embed?.author || {}), name: e.target.value },
+                                            },
+                                          },
+                                        }));
+                                        setDirty(true);
+                                      }}
+                                      className="
+                                        w-full px-3 py-2 rounded-2xl
+                                        border border-[var(--border-subtle)]/70
+                                        bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                                        text-[var(--text-main)]
+                                        outline-none
+                                      "
+                                      placeholder="Author name"
+                                    />
+                                    <input
+                                      value={settings.welcome?.embed?.author?.iconUrl || ""}
+                                      onChange={(e) => {
+                                        setSettings((s) => ({
+                                          ...s,
+                                          welcome: {
+                                            ...s.welcome,
+                                            embed: {
+                                              ...(s.welcome?.embed || {}),
+                                              author: { ...(s.welcome?.embed?.author || {}), iconUrl: e.target.value },
+                                            },
+                                          },
+                                        }));
+                                        setDirty(true);
+                                      }}
+                                      className="
+                                        w-full px-3 py-2 rounded-2xl
+                                        border border-[var(--border-subtle)]/70
+                                        bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                                        text-[var(--text-main)]
+                                        outline-none
+                                      "
+                                      placeholder="Icon URL"
+                                    />
+                                    <input
+                                      value={settings.welcome?.embed?.author?.url || ""}
+                                      onChange={(e) => {
+                                        setSettings((s) => ({
+                                          ...s,
+                                          welcome: {
+                                            ...s.welcome,
+                                            embed: {
+                                              ...(s.welcome?.embed || {}),
+                                              author: { ...(s.welcome?.embed?.author || {}), url: e.target.value },
+                                            },
+                                          },
+                                        }));
+                                        setDirty(true);
+                                      }}
+                                      className="
+                                        w-full px-3 py-2 rounded-2xl
+                                        border border-[var(--border-subtle)]/70
+                                        bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                                        text-[var(--text-main)]
+                                        outline-none
+                                      "
+                                      placeholder="Author URL"
+                                    />
+                                  </div>
+                                </div>
+
+                                <label className="woc-card p-4">
+                                  <div className="font-semibold text-sm">Thumbnail URL</div>
+                                  <div className="text-xs text-[var(--text-muted)] mt-1">
+                                    Default is {"{avatar}"}.
+                                  </div>
+                                  <input
+                                    value={settings.welcome?.embed?.thumbnailUrl || ""}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: {
+                                          ...s.welcome,
+                                          embed: { ...(s.welcome?.embed || {}), thumbnailUrl: e.target.value },
+                                        },
+                                      }));
+                                      setDirty(true);
+                                    }}
+                                    className="
+                                      mt-3 w-full px-3 py-2 rounded-2xl
+                                      border border-[var(--border-subtle)]/70
+                                      bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                                      text-[var(--text-main)]
+                                      outline-none
+                                    "
+                                    placeholder="{avatar}"
+                                  />
+                                </label>
+
+                                <label className="woc-card p-4">
+                                  <div className="font-semibold text-sm">Image URL</div>
+                                  <div className="text-xs text-[var(--text-muted)] mt-1">
+                                    Big image below the description.
+                                  </div>
+                                  <input
+                                    value={settings.welcome?.embed?.imageUrl || ""}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: {
+                                          ...s.welcome,
+                                          embed: { ...(s.welcome?.embed || {}), imageUrl: e.target.value },
+                                        },
+                                      }));
+                                      setDirty(true);
+                                    }}
+                                    className="
+                                      mt-3 w-full px-3 py-2 rounded-2xl
+                                      border border-[var(--border-subtle)]/70
+                                      bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                                      text-[var(--text-main)]
+                                      outline-none
+                                    "
+                                    placeholder="https://…"
+                                  />
+                                </label>
+
+                                <div className="woc-card p-4 sm:col-span-2">
+                                  <div className="font-semibold text-sm">Footer</div>
+                                  <div className="text-xs text-[var(--text-muted)] mt-1">
+                                    Optional footer line.
+                                  </div>
+
+                                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                    <input
+                                      value={settings.welcome?.embed?.footer?.text || ""}
+                                      onChange={(e) => {
+                                        setSettings((s) => ({
+                                          ...s,
+                                          welcome: {
+                                            ...s.welcome,
+                                            embed: {
+                                              ...(s.welcome?.embed || {}),
+                                              footer: { ...(s.welcome?.embed?.footer || {}), text: e.target.value },
+                                            },
+                                          },
+                                        }));
+                                        setDirty(true);
+                                      }}
+                                      className="
+                                        w-full px-3 py-2 rounded-2xl
+                                        border border-[var(--border-subtle)]/70
+                                        bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                                        text-[var(--text-main)]
+                                        outline-none
+                                      "
+                                      placeholder="Footer text"
+                                    />
+                                    <input
+                                      value={settings.welcome?.embed?.footer?.iconUrl || ""}
+                                      onChange={(e) => {
+                                        setSettings((s) => ({
+                                          ...s,
+                                          welcome: {
+                                            ...s.welcome,
+                                            embed: {
+                                              ...(s.welcome?.embed || {}),
+                                              footer: { ...(s.welcome?.embed?.footer || {}), iconUrl: e.target.value },
+                                            },
+                                          },
+                                        }));
+                                        setDirty(true);
+                                      }}
+                                      className="
+                                        w-full px-3 py-2 rounded-2xl
+                                        border border-[var(--border-subtle)]/70
+                                        bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                                        text-[var(--text-main)]
+                                        outline-none
+                                      "
+                                      placeholder="Footer icon URL"
+                                    />
+                                  </div>
+                                </div>
+
+                                <div className="woc-card p-4 sm:col-span-2">
+                                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                                    <div>
+                                      <div className="font-semibold text-sm">Fields</div>
+                                      <div className="text-xs text-[var(--text-muted)] mt-1">
+                                        Add up to 25 fields. Great for rules, links, hints.
+                                      </div>
+                                    </div>
+
+                                    <button
+                                      type="button"
+                                      className="woc-btn-ghost text-xs"
+                                      onClick={() => {
+                                        setSettings((s) => {
+                                          const next = deepClone(s);
+                                          next.welcome ||= {};
+                                          next.welcome.embed ||= {};
+                                          const fields = Array.isArray(next.welcome.embed.fields)
+                                            ? next.welcome.embed.fields
+                                            : [];
+                                          fields.push({ name: "New field", value: "Value", inline: false });
+                                          next.welcome.embed.fields = clampFields(fields);
+                                          return next;
+                                        });
+                                        setDirty(true);
+                                      }}
+                                    >
+                                      + Add field
+                                    </button>
+                                  </div>
+
+                                  <div className="mt-3 grid gap-3">
+                                    {(settings.welcome?.embed?.fields || []).map((f, idx) => (
+                                      <div key={idx} className="woc-card p-4">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <div className="font-semibold text-xs text-[var(--text-muted)]">
+                                            Field #{idx + 1}
+                                          </div>
+                                          <button
+                                            type="button"
+                                            className="woc-btn-ghost text-xs"
+                                            onClick={() => {
+                                              setSettings((s) => {
+                                                const next = deepClone(s);
+                                                const list = Array.isArray(next.welcome?.embed?.fields)
+                                                  ? next.welcome.embed.fields
+                                                  : [];
+                                                list.splice(idx, 1);
+                                                next.welcome.embed.fields = clampFields(list);
+                                                return next;
+                                              });
+                                              setDirty(true);
+                                            }}
+                                          >
+                                            Remove
+                                          </button>
+                                        </div>
+
+                                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                          <input
+                                            value={f?.name || ""}
+                                            onChange={(e) => {
+                                              const val = e.target.value;
+                                              setSettings((s) => {
+                                                const next = deepClone(s);
+                                                next.welcome ||= {};
+                                                next.welcome.embed ||= {};
+                                                const list = Array.isArray(next.welcome.embed.fields)
+                                                  ? next.welcome.embed.fields
+                                                  : [];
+                                                list[idx] = { ...(list[idx] || {}), name: val };
+                                                next.welcome.embed.fields = clampFields(list);
+                                                return next;
+                                              });
+                                              setDirty(true);
+                                            }}
+                                            className="
+                                              w-full px-3 py-2 rounded-2xl
+                                              border border-[var(--border-subtle)]/70
+                                              bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                                              text-[var(--text-main)]
+                                              outline-none
+                                            "
+                                            placeholder="Field name"
+                                          />
+                                          <label className="inline-flex items-center gap-2 justify-end">
+                                            <span className="text-xs text-[var(--text-muted)]">Inline</span>
+                                            <input
+                                              type="checkbox"
+                                              checked={!!f?.inline}
+                                              onChange={(e) => {
+                                                const checked = e.target.checked;
+                                                setSettings((s) => {
+                                                  const next = deepClone(s);
+                                                  next.welcome ||= {};
+                                                  next.welcome.embed ||= {};
+                                                  const list = Array.isArray(next.welcome.embed.fields)
+                                                    ? next.welcome.embed.fields
+                                                    : [];
+                                                  list[idx] = { ...(list[idx] || {}), inline: checked };
+                                                  next.welcome.embed.fields = clampFields(list);
+                                                  return next;
+                                                });
+                                                setDirty(true);
+                                              }}
+                                            />
+                                          </label>
+                                        </div>
+
+                                        <textarea
+                                          value={f?.value || ""}
+                                          onChange={(e) => {
+                                            const val = e.target.value;
+                                            setSettings((s) => {
+                                              const next = deepClone(s);
+                                              next.welcome ||= {};
+                                              next.welcome.embed ||= {};
+                                              const list = Array.isArray(next.welcome.embed.fields)
+                                                ? next.welcome.embed.fields
+                                                : [];
+                                              list[idx] = { ...(list[idx] || {}), value: val };
+                                              next.welcome.embed.fields = clampFields(list);
+                                              return next;
+                                            });
+                                            setDirty(true);
+                                          }}
+                                          className="
+                                            mt-2 w-full px-3 py-2 rounded-2xl min-h-[80px]
+                                            border border-[var(--border-subtle)]/70
+                                            bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                                            text-[var(--text-main)]
+                                            outline-none
+                                          "
+                                          placeholder="Field value"
+                                        />
+                                      </div>
+                                    ))}
+
+                                    {!settings.welcome?.embed?.fields?.length ? (
+                                      <div className="text-xs text-[var(--text-muted)]">
+                                        No fields yet. Add one if you want rules, links, or quick-start info.
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
                       </div>
                     ) : null}
@@ -1531,7 +2257,10 @@ export default function DashboardPage() {
                             ["antiLink", "Anti-link", "Block invite links and suspicious URLs."],
                             ["antiSpam", "Anti-spam", "Rate limit repeated messages."],
                           ].map(([key, label, hint]) => (
-                            <label key={key} className="woc-card p-4 flex items-start justify-between gap-3 cursor-pointer">
+                            <label
+                              key={key}
+                              className="woc-card p-4 flex items-start justify-between gap-3 cursor-pointer"
+                            >
                               <div>
                                 <div className="font-semibold text-sm">{label}</div>
                                 <div className="text-xs text-[var(--text-muted)] mt-1">{hint}</div>
@@ -1559,7 +2288,7 @@ export default function DashboardPage() {
                     {/* PERSONALITY */}
                     {subtab === "personality" ? (
                       <div className="space-y-4">
-                        <SectionTitle title="WoC personality" subtitle="Keep the dashboard alive, not corporate-boring." />
+                        <SectionTitle title="WoC personality" subtitle="Keep the dashboard alive." />
 
                         <div className="grid gap-3 sm:grid-cols-2">
                           <label className="woc-card p-4">
@@ -1595,7 +2324,9 @@ export default function DashboardPage() {
 
                           <label className="woc-card p-4">
                             <div className="font-semibold text-sm">Sass level</div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">0 = polite librarian, 100 = chaotic bard.</div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">
+                              0 = polite librarian, 100 = chaotic bard.
+                            </div>
 
                             <input
                               type="range"
@@ -1650,7 +2381,10 @@ export default function DashboardPage() {
                     {/* ACTION LOG */}
                     {subtab === "actionlog" ? (
                       <div className="space-y-3">
-                        <SectionTitle title="Action log" subtitle="Soon: admin actions, toggles changed, mod events (from bot/webhook)." />
+                        <SectionTitle
+                          title="Action log"
+                          subtitle="Soon: admin actions, toggles changed, mod events (from bot/webhook)."
+                        />
                         <div className="woc-card p-4 text-sm text-[var(--text-muted)]">
                           No entries yet. The chronicle is empty… suspiciously peaceful.
                         </div>
