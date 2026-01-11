@@ -14,6 +14,10 @@ const STATUS_ENDPOINT = (gid) => `/api/guilds/${encodeURIComponent(gid)}/status`
 const SETTINGS_ENDPOINT = (gid) => `/api/guilds/${encodeURIComponent(gid)}/settings`;
 const CHANNELS_ENDPOINT = (gid) => `/api/guilds/${encodeURIComponent(gid)}/channels`;
 
+// ✅ Step 3: PNG render endpoint (Mee6-style)
+const WELCOME_CARD_PNG_ENDPOINT = (gid) =>
+  `/api/guilds/${encodeURIComponent(gid)}/welcome-card.png`;
+
 // Fallback endpoint (some builds use this style)
 const DISCORD_CHANNELS_FALLBACK = (gid) =>
   `/api/discord/channels?guildId=${encodeURIComponent(gid)}`;
@@ -371,7 +375,7 @@ const MODULE_TREE = [
       { key: "raidboss", label: "Raid Boss", desc: "Boss raids." },
       { key: "raidattack", label: "Raid Attack", desc: "Raid actions." },
       { key: "clanboss", label: "Clan Boss", desc: "Clan boss fights." },
-      { key: "exam", label: "Exam", desc: "Exam combat challenges." },
+      { key: "exam", label: "Exam combat challenges." },
       { key: "duelstats", label: "Duel Stats", desc: "Stats + records." },
       { key: "examleaderboard", label: "Exam Leaderboard", desc: "Rankings." },
       { key: "examclanrank", label: "Exam Clan Rank", desc: "Clan ranking." },
@@ -432,7 +436,7 @@ const MODULE_TREE = [
     desc: "Family system + trees.",
     subs: [
       { key: "marry", label: "Marry", desc: "Marriage flow." },
-      { key: "divorce", label: "Divorce", desc: "Divorce flow." },
+      { key: "divorce", label: "Divorce flow." },
       { key: "adopt", label: "Adopt", desc: "Adoption." },
       { key: "children", label: "Children", desc: "Children list." },
       { key: "parent", label: "Parent", desc: "Parent system." },
@@ -629,6 +633,43 @@ function ensureDefaultSettings(guildId) {
   };
 }
 
+// ✅ Step 3 helper: build the PNG preview URL with query params
+function buildWelcomeCardPreviewUrl({ guildId, selectedGuild, card, userPreview }) {
+  if (!guildId) return "";
+
+  const params = new URLSearchParams();
+
+  // Server details
+  params.set("serverName", selectedGuild?.name || "Server");
+  if (selectedGuild?.id && selectedGuild?.icon) {
+    params.set(
+      "serverIconUrl",
+      `https://cdn.discordapp.com/icons/${selectedGuild.id}/${selectedGuild.icon}.png?size=128`
+    );
+  }
+
+  // Fake preview user
+  params.set("userName", userPreview?.userName || "New Member");
+  params.set("tag", userPreview?.tag || "NewMember#0001");
+  params.set("memberCount", userPreview?.memberCount || "1337");
+  params.set(
+    "avatarUrl",
+    userPreview?.avatarUrl || "https://cdn.discordapp.com/embed/avatars/0.png"
+  );
+
+  // Card settings
+  params.set("title", card?.title || "{username} joined {server}");
+  params.set("subtitle", card?.subtitle || "Member #{membercount}");
+  params.set("backgroundColor", card?.backgroundColor || "#0b1020");
+  params.set("textColor", card?.textColor || "#ffffff");
+  params.set("overlayOpacity", String(card?.overlayOpacity ?? 0.35));
+  params.set("showAvatar", String(card?.showAvatar !== false));
+
+  if (card?.backgroundUrl) params.set("backgroundUrl", card.backgroundUrl);
+
+  return `${WELCOME_CARD_PNG_ENDPOINT(guildId)}?${params.toString()}`;
+}
+
 export default function DashboardPage() {
   let woc = null;
   try {
@@ -698,6 +739,9 @@ export default function DashboardPage() {
 
   const [moduleCategory, setModuleCategory] = useState("moderation");
   const [moduleSearch, setModuleSearch] = useState("");
+
+  // ✅ Step 3: preview refresh key
+  const [previewKey, setPreviewKey] = useState(0);
 
   const clientIdRaw = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || "";
   const clientId = String(clientIdRaw || "").trim();
@@ -1936,7 +1980,7 @@ export default function DashboardPage() {
                             <div className="woc-card p-5 sm:col-span-2">
                               <div className="font-semibold text-sm">Welcome card</div>
                               <div className="text-xs text-[var(--text-muted)] mt-1">
-                                Sends a visual-style card (embed-based for now) when a member joins.
+                                Sends a visual-style card (PNG preview powered by your API route).
                               </div>
 
                               <div className="grid gap-3 sm:grid-cols-2 mt-4">
@@ -1953,6 +1997,7 @@ export default function DashboardPage() {
                                         }),
                                       }));
                                       setDirty(true);
+                                      setPreviewKey((k) => k + 1);
                                     }}
                                     className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
                                     placeholder="https://..."
@@ -1972,6 +2017,7 @@ export default function DashboardPage() {
                                         }),
                                       }));
                                       setDirty(true);
+                                      setPreviewKey((k) => k + 1);
                                     }}
                                     className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
                                   />
@@ -1990,6 +2036,7 @@ export default function DashboardPage() {
                                         }),
                                       }));
                                       setDirty(true);
+                                      setPreviewKey((k) => k + 1);
                                     }}
                                     className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
                                   />
@@ -2010,6 +2057,7 @@ export default function DashboardPage() {
                                           }),
                                         }));
                                         setDirty(true);
+                                        setPreviewKey((k) => k + 1);
                                       }}
                                     />
                                   </div>
@@ -2030,6 +2078,7 @@ export default function DashboardPage() {
                                           }),
                                         }));
                                         setDirty(true);
+                                        setPreviewKey((k) => k + 1);
                                       }}
                                     />
                                   </div>
@@ -2057,6 +2106,7 @@ export default function DashboardPage() {
                                         }),
                                       }));
                                       setDirty(true);
+                                      setPreviewKey((k) => k + 1);
                                     }}
                                     className="w-full"
                                   />
@@ -2082,9 +2132,80 @@ export default function DashboardPage() {
                                         }),
                                       }));
                                       setDirty(true);
+                                      setPreviewKey((k) => k + 1);
                                     }}
                                   />
                                 </label>
+                              </div>
+
+                              {/* ✅ Step 3: Live PNG preview */}
+                              <div className="mt-5 woc-card p-4">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <div className="font-semibold text-sm">Live preview</div>
+                                    <div className="text-xs text-[var(--text-muted)] mt-1">
+                                      Renders a real PNG via{" "}
+                                      <span className="font-semibold text-[var(--text-main)]">
+                                        /api/guilds/[guildId]/welcome-card.png
+                                      </span>
+                                      . If the route isn’t deployed yet, it will look broken until you add it.
+                                    </div>
+                                  </div>
+
+                                  <button
+                                    type="button"
+                                    className="woc-btn-ghost text-xs"
+                                    onClick={() => {
+                                      setPreviewKey((k) => k + 1);
+                                      showToast("Preview refreshed ✨", "playful");
+                                    }}
+                                  >
+                                    Refresh
+                                  </button>
+                                </div>
+
+                                {(() => {
+                                  const previewUrl = buildWelcomeCardPreviewUrl({
+                                    guildId: canonicalGuildId,
+                                    selectedGuild,
+                                    card: settings.welcome?.card || {},
+                                    userPreview: {
+                                      userName: "Preview Member",
+                                      tag: "PreviewMember#0001",
+                                      memberCount: String(
+                                        selectedGuild?.approximate_member_count ||
+                                          selectedGuild?.memberCount ||
+                                          1337
+                                      ),
+                                      avatarUrl: "https://cdn.discordapp.com/embed/avatars/2.png",
+                                    },
+                                  });
+
+                                  const src = previewUrl
+                                    ? `${previewUrl}&t=${Date.now()}&k=${previewKey}`
+                                    : "";
+
+                                  return src ? (
+                                    <div className="mt-3">
+                                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                                      <img
+                                        src={src}
+                                        alt="Welcome card preview"
+                                        className="w-full rounded-2xl border border-[var(--border-subtle)]/70 overflow-hidden"
+                                      />
+                                      <div className="mt-2 text-[0.72rem] text-[var(--text-muted)] break-all">
+                                        Endpoint:{" "}
+                                        <span className="font-semibold text-[var(--text-main)]">
+                                          {previewUrl}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="mt-3 text-xs text-amber-200/90">
+                                      Pick a server first to preview.
+                                    </div>
+                                  );
+                                })()}
                               </div>
                             </div>
                           ) : null}
