@@ -3,7 +3,6 @@ import { ImageResponse } from "next/og";
 export const runtime = "edge";
 export const dynamic = "force-dynamic";
 
-// small helpers
 function isSnowflake(id) {
   const s = String(id || "").trim();
   return /^[0-9]{17,20}$/.test(s);
@@ -18,15 +17,11 @@ function pickFirst(...vals) {
 }
 
 function getGuildId(req, ctx) {
-  // 1) normal: App Router params
-  const fromParams = ctx?.params?.guildId;
-
-  // 2) fallback: query ?guildId=
   const url = new URL(req.url);
+
+  const fromParams = ctx?.params?.guildId;
   const fromQuery = url.searchParams.get("guildId");
 
-  // 3) fallback: parse from pathname /api/guilds/<id>/welcome-card.png
-  // (works even if params is empty due to binding/rewrite weirdness)
   const m = url.pathname.match(/\/api\/guilds\/([^/]+)\/welcome-card\.png$/i);
   const fromPath = m?.[1];
 
@@ -34,27 +29,53 @@ function getGuildId(req, ctx) {
   return isSnowflake(gid) ? gid : "";
 }
 
-function hexToRgba(hex, alpha = 0.35) {
-  const h = String(hex || "").replace("#", "").trim();
-  const ok = /^[0-9a-f]{6}$/i.test(h);
-  const v = ok ? h : "0b1020";
-  const r = parseInt(v.slice(0, 2), 16);
-  const g = parseInt(v.slice(2, 4), 16);
-  const b = parseInt(v.slice(4, 6), 16);
-  const a = Math.max(0, Math.min(1, Number(alpha)));
-  return `rgba(${r},${g},${b},${a})`;
+function safeHex(hex, fallback) {
+  const s = String(hex || "").trim();
+  if (/^#[0-9a-f]{6}$/i.test(s)) return s;
+  return fallback;
+}
+
+function clamp01(n, fallback = 0.35) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return fallback;
+  return Math.max(0, Math.min(1, x));
+}
+
+function hexToRgb(hex) {
+  const h = String(hex).replace("#", "");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return { r, g, b };
 }
 
 export async function GET(req, ctx) {
   const url = new URL(req.url);
+
   const guildId = getGuildId(req, ctx);
+
+  // 🔎 Debug mode: proves what Next is passing + what we parsed
+  if (url.searchParams.get("debug") === "1") {
+    return Response.json(
+      {
+        ok: true,
+        route: "welcome-card.png",
+        pathname: url.pathname,
+        ctxKeys: Object.keys(ctx || {}),
+        params: ctx?.params ?? null,
+        guildIdResolved: guildId || null,
+        query: Object.fromEntries(url.searchParams.entries()),
+      },
+      { status: 200 }
+    );
+  }
 
   if (!guildId) {
     return Response.json(
       {
         error: "Missing guildId",
         hint:
-          "Expected /api/guilds/<guildId>/welcome-card.png or ?guildId=<guildId>",
+          "Use /api/guilds/<guildId>/welcome-card.png or ?guildId=<guildId>. Add ?debug=1 to inspect.",
         got: {
           pathname: url.pathname,
           params: ctx?.params ?? null,
@@ -65,27 +86,35 @@ export async function GET(req, ctx) {
     );
   }
 
-  // read inputs (your dashboard already sends these)
+  // Read inputs
   const serverName = url.searchParams.get("serverName") || "Server";
   const username = url.searchParams.get("username") || "New Member";
   const tag = url.searchParams.get("tag") || "";
   const membercount = url.searchParams.get("membercount") || "";
-  const title = url.searchParams.get("title") || `${username} just joined the server`;
-  const subtitle = url.searchParams.get("subtitle") || (membercount ? `Member #${membercount}` : "");
+
+  const title =
+    url.searchParams.get("title") || `${username} just joined the server`;
+  const subtitle =
+    url.searchParams.get("subtitle") ||
+    (membercount ? `Member #${membercount}` : "");
+
   const backgroundUrl = url.searchParams.get("backgroundUrl") || "";
   const serverIconUrl = url.searchParams.get("serverIconUrl") || "";
   const avatarUrl = url.searchParams.get("avatarUrl") || "";
   const showAvatar = url.searchParams.get("showAvatar") === "true";
 
-  const backgroundColor = url.searchParams.get("backgroundColor") || "#0b1020";
-  const textColor = url.searchParams.get("textColor") || "#ffffff";
-  const overlayOpacity = Number(url.searchParams.get("overlayOpacity") ?? 0.35);
+  // ✅ Force non-white defaults (even if params are missing)
+  const backgroundColor = safeHex(
+    url.searchParams.get("backgroundColor"),
+    "#0b1020"
+  );
+  const textColor = safeHex(url.searchParams.get("textColor"), "#ffffff");
+  const overlayOpacity = clamp01(
+    url.searchParams.get("overlayOpacity"),
+    0.35
+  );
 
-  // cache-friendly headers (but still dynamic)
-  const headers = {
-    "Content-Type": "image/png",
-    "Cache-Control": "no-store",
-  };
+  const { r, g, b } = hexToRgb(backgroundColor);
 
   return new ImageResponse(
     (
@@ -97,20 +126,25 @@ export async function GET(req, ctx) {
           alignItems: "center",
           justifyContent: "space-between",
           padding: 48,
+          position: "relative",
+
+          // If everything else fails, THIS still paints dark.
           backgroundColor,
           color: textColor,
           fontFamily: "system-ui, Segoe UI, Inter, Arial",
-          position: "relative",
         }}
       >
-        {/* background image */}
+        {/* Background image */}
         {backgroundUrl ? (
           <img
             src={backgroundUrl}
             alt=""
             style={{
               position: "absolute",
-              inset: 0,
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
               width: "100%",
               height: "100%",
               objectFit: "cover",
@@ -118,17 +152,28 @@ export async function GET(req, ctx) {
           />
         ) : null}
 
-        {/* overlay for readability */}
+        {/* Overlay */}
         <div
           style={{
             position: "absolute",
-            inset: 0,
-            background: hexToRgba(backgroundColor, overlayOpacity),
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: `rgba(${r},${g},${b},${overlayOpacity})`,
           }}
         />
 
-        {/* left: server */}
-        <div style={{ position: "relative", display: "flex", gap: 18, alignItems: "center" }}>
+        {/* Left: server */}
+        <div
+          style={{
+            position: "relative",
+            display: "flex",
+            gap: 18,
+            alignItems: "center",
+            minWidth: 320,
+          }}
+        >
           {serverIconUrl ? (
             <img
               src={serverIconUrl}
@@ -143,29 +188,40 @@ export async function GET(req, ctx) {
                 width: 84,
                 height: 84,
                 borderRadius: 24,
-                background: "rgba(255,255,255,0.10)",
+                backgroundColor: "rgba(255,255,255,0.12)",
               }}
             />
           )}
 
           <div style={{ display: "flex", flexDirection: "column" }}>
-            <div style={{ fontSize: 22, opacity: 0.9 }}>{serverName}</div>
-            <div style={{ fontSize: 14, opacity: 0.7 }}>
+            <div style={{ fontSize: 22, opacity: 0.92 }}>{serverName}</div>
+            <div style={{ fontSize: 14, opacity: 0.75 }}>
               {tag ? `${tag} • ` : ""}guildId: {guildId}
             </div>
           </div>
         </div>
 
-        {/* middle text */}
-        <div style={{ position: "relative", flex: 1, paddingLeft: 32, paddingRight: 32 }}>
-          <div style={{ fontSize: 44, fontWeight: 800, lineHeight: 1.1 }}>{title}</div>
+        {/* Middle text */}
+        <div style={{ position: "relative", flex: 1, padding: "0 32px" }}>
+          <div style={{ fontSize: 44, fontWeight: 800, lineHeight: 1.1 }}>
+            {title}
+          </div>
           {subtitle ? (
-            <div style={{ fontSize: 22, marginTop: 10, opacity: 0.9 }}>{subtitle}</div>
+            <div style={{ fontSize: 22, marginTop: 10, opacity: 0.9 }}>
+              {subtitle}
+            </div>
           ) : null}
         </div>
 
-        {/* right: avatar */}
-        <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "flex-end" }}>
+        {/* Right: avatar */}
+        <div
+          style={{
+            position: "relative",
+            width: 160,
+            display: "flex",
+            justifyContent: "flex-end",
+          }}
+        >
           {showAvatar && avatarUrl ? (
             <img
               src={avatarUrl}
@@ -183,13 +239,20 @@ export async function GET(req, ctx) {
                 width: 120,
                 height: 120,
                 borderRadius: 36,
-                background: "rgba(255,255,255,0.10)",
+                backgroundColor: "rgba(255,255,255,0.12)",
               }}
             />
           )}
         </div>
       </div>
     ),
-    { width: 1200, height: 400, headers }
+    {
+      width: 1200,
+      height: 400,
+      headers: {
+        "Content-Type": "image/png",
+        "Cache-Control": "no-store",
+      },
+    }
   );
 }
