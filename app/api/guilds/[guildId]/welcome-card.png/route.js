@@ -1,374 +1,329 @@
 // app/api/guilds/[guildId]/welcome-card.png/route.js
-import { ImageResponse } from "next/og";
 
-export const runtime = "edge";
+import { NextResponse } from "next/server";
+import { createCanvas, loadImage } from "@napi-rs/canvas";
+
+export const runtime = "nodejs"; // IMPORTANT: canvas needs Node runtime (not Edge)
+export const dynamic = "force-dynamic"; // avoid caching surprises while testing
 
 function clamp(n, min, max) {
-  n = Number.isFinite(n) ? n : min;
   return Math.max(min, Math.min(max, n));
 }
 
-function toHexColor(input, fallback) {
-  const s = String(input || "").trim();
+function asStr(v, fallback = "") {
+  const s = String(v ?? "").trim();
+  return s ? s : fallback;
+}
+
+function asBool(v, fallback = false) {
+  const s = String(v ?? "").trim().toLowerCase();
   if (!s) return fallback;
-  if (/^#[0-9a-fA-F]{6}$/.test(s)) return s;
+  return s === "true" || s === "1" || s === "yes" || s === "on";
+}
+
+function asNum(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function safeColor(hex, fallback) {
+  const s = String(hex || "").trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(s) || /^#[0-9a-fA-F]{3}$/.test(s)) return s;
   return fallback;
 }
 
-function safeText(input, fallback = "") {
-  const s = String(input ?? "").trim();
-  return s || fallback;
+function roundRect(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
 }
 
-async function fetchAsDataUrl(url) {
+async function tryLoadImage(url, timeoutMs = 4500) {
+  if (!url) return null;
+  // Basic “looks like image” guard: still allow querystrings etc.
+  const u = String(url);
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const u = String(url || "").trim();
-    if (!u || !/^https?:\/\//i.test(u)) return null;
-
-    const res = await fetch(u, {
-      // some CDNs behave better with a UA
-      headers: { "user-agent": "Mozilla/5.0" },
-      cache: "no-store",
-    });
-    if (!res.ok) return null;
-
-    const ct = res.headers.get("content-type") || "image/png";
-    const buf = await res.arrayBuffer();
-
-    // Convert to base64
-    const bytes = new Uint8Array(buf);
-    let binary = "";
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-    const base64 = btoa(binary);
-
-    return `data:${ct};base64,${base64}`;
+    // @napi-rs/canvas loadImage can accept URL, but if the host blocks,
+    // it will throw. We catch and return null.
+    const img = await loadImage(u, { signal: controller.signal });
+    return img;
   } catch {
     return null;
+  } finally {
+    clearTimeout(t);
   }
+}
+
+function drawCover(ctx, img, x, y, w, h) {
+  const iw = img.width;
+  const ih = img.height;
+  if (!iw || !ih) return;
+
+  const scale = Math.max(w / iw, h / ih);
+  const sw = iw * scale;
+  const sh = ih * scale;
+  const sx = x + (w - sw) / 2;
+  const sy = y + (h - sh) / 2;
+
+  ctx.drawImage(img, sx, sy, sw, sh);
 }
 
 export async function GET(req, { params }) {
   try {
     const { searchParams } = new URL(req.url);
 
-    const guildId = String(params?.guildId || "").trim();
+    const guildId = asStr(params?.guildId, "");
+    if (!guildId) {
+      return NextResponse.json({ error: "Missing guildId." }, { status: 400 });
+    }
 
-    // Incoming params (your dashboard builds these)
-    const serverName = safeText(searchParams.get("serverName"), "Your Server");
-    const serverIconUrl = searchParams.get("serverIconUrl") || "";
-    const avatarUrl = searchParams.get("avatarUrl") || "";
-    const username = safeText(searchParams.get("username"), "New Member");
-    const tag = safeText(searchParams.get("tag"), "user#0000");
-    const membercount = safeText(searchParams.get("membercount"), "???");
-
-    const title = safeText(searchParams.get("title"), `${username} just joined`);
-    const subtitle = safeText(searchParams.get("subtitle"), `Member #${membercount}`);
-
-    const backgroundUrl = searchParams.get("backgroundUrl") || "";
-    const backgroundColor = toHexColor(searchParams.get("backgroundColor"), "#0b1020");
-    const textColor = toHexColor(searchParams.get("textColor"), "#ffffff");
-
-    const overlayOpacity = clamp(parseFloat(searchParams.get("overlayOpacity") ?? "0.35"), 0, 1);
-
-    const showAvatarRaw = String(searchParams.get("showAvatar") ?? "true").toLowerCase();
-    const showAvatar = showAvatarRaw !== "false";
-
-    // Fetch remote images safely (if they fail, we keep going)
-    const [bgData, avatarData, iconData] = await Promise.all([
-      fetchAsDataUrl(backgroundUrl),
-      fetchAsDataUrl(avatarUrl),
-      fetchAsDataUrl(serverIconUrl),
-    ]);
-
-    // Small anti-cache salt if you want (optional)
-    // const salt = searchParams.get("t") || "";
-
-    // Style tokens
-    const neonA = "#7c3aed"; // purple
-    const neonB = "#06b6d4"; // cyan
-    const neonC = "#ef4444"; // red
-
-    const cardW = 1100;
-    const cardH = 340;
-
-    return new ImageResponse(
-      (
-        <div
-          style={{
-            width: cardW,
-            height: cardH,
-            display: "flex",
-            position: "relative",
-            fontFamily:
-              'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial',
-            borderRadius: 28,
-            overflow: "hidden",
-            background: backgroundColor,
-          }}
-        >
-          {/* BACKGROUND LAYER */}
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              backgroundImage: bgData
-                ? `url(${bgData})`
-                : `radial-gradient(900px 380px at 10% 15%, rgba(124,58,237,0.35), transparent 60%),
-                   radial-gradient(800px 360px at 85% 30%, rgba(6,182,212,0.28), transparent 55%),
-                   radial-gradient(700px 400px at 70% 90%, rgba(239,68,68,0.18), transparent 60%),
-                   linear-gradient(135deg, #0b1020, #070a14)`,
-              backgroundSize: "cover",
-              backgroundPosition: "center",
-              filter: bgData ? "saturate(1.1) contrast(1.05)" : "none",
-              transform: "scale(1.02)",
-            }}
-          />
-
-          {/* OVERLAY for readability */}
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              background: `linear-gradient(90deg,
-                rgba(0,0,0,${overlayOpacity + 0.15}) 0%,
-                rgba(0,0,0,${overlayOpacity}) 45%,
-                rgba(0,0,0,${overlayOpacity + 0.18}) 100%)`,
-            }}
-          />
-
-          {/* NEON FRAME */}
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              borderRadius: 28,
-              border: "1px solid rgba(255,255,255,0.10)",
-              boxShadow:
-                "0 20px 80px rgba(0,0,0,0.55), inset 0 0 0 1px rgba(255,255,255,0.05)",
-            }}
-          />
-          <div
-            style={{
-              position: "absolute",
-              inset: -2,
-              borderRadius: 30,
-              background: `conic-gradient(from 200deg, ${neonA}, ${neonB}, ${neonC}, ${neonA})`,
-              opacity: 0.18,
-              filter: "blur(18px)",
-            }}
-          />
-
-          {/* CONTENT */}
-          <div
-            style={{
-              position: "relative",
-              display: "flex",
-              gap: 22,
-              padding: 30,
-              width: "100%",
-              height: "100%",
-              alignItems: "center",
-            }}
-          >
-            {/* LEFT: AVATAR */}
-            {showAvatar ? (
-              <div
-                style={{
-                  width: 150,
-                  height: 150,
-                  borderRadius: 999,
-                  overflow: "hidden",
-                  flexShrink: 0,
-                  position: "relative",
-                  background: "rgba(255,255,255,0.06)",
-                  border: "1px solid rgba(255,255,255,0.14)",
-                  boxShadow: "0 18px 50px rgba(0,0,0,0.45)",
-                }}
-              >
-                <div
-                  style={{
-                    position: "absolute",
-                    inset: -10,
-                    background: `radial-gradient(circle at 30% 30%, rgba(124,58,237,0.55), transparent 55%),
-                                 radial-gradient(circle at 70% 70%, rgba(6,182,212,0.35), transparent 60%)`,
-                    filter: "blur(12px)",
-                  }}
-                />
-                {avatarData ? (
-                  <img
-                    src={avatarData}
-                    alt="avatar"
-                    style={{
-                      width: "100%",
-                      height: "100%",
-                      objectFit: "cover",
-                      position: "relative",
-                    }}
-                  />
-                ) : (
-                  <div
-                    style={{
-                      width: "100%",
-                      height: "100%",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      color: "rgba(255,255,255,0.75)",
-                      fontSize: 54,
-                      fontWeight: 800,
-                    }}
-                  >
-                    {safeText(username?.[0], "U").toUpperCase()}
-                  </div>
-                )}
-              </div>
-            ) : null}
-
-            {/* MIDDLE: TEXT */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, flex: 1, minWidth: 0 }}>
-              <div
-                style={{
-                  display: "flex",
-                  gap: 10,
-                  alignItems: "center",
-                  color: "rgba(255,255,255,0.75)",
-                  fontSize: 18,
-                }}
-              >
-                {/* server icon */}
-                <div
-                  style={{
-                    width: 36,
-                    height: 36,
-                    borderRadius: 12,
-                    overflow: "hidden",
-                    background: "rgba(255,255,255,0.06)",
-                    border: "1px solid rgba(255,255,255,0.12)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  {iconData ? (
-                    <img
-                      src={iconData}
-                      alt="server icon"
-                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                    />
-                  ) : (
-                    <div style={{ fontSize: 14, fontWeight: 700 }}>WoC</div>
-                  )}
-                </div>
-
-                <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {serverName}
-                </div>
-
-                <div
-                  style={{
-                    marginLeft: "auto",
-                    padding: "6px 10px",
-                    borderRadius: 999,
-                    fontSize: 14,
-                    border: "1px solid rgba(255,255,255,0.14)",
-                    background: "rgba(0,0,0,0.25)",
-                    color: "rgba(255,255,255,0.85)",
-                  }}
-                >
-                  #{membercount}
-                </div>
-              </div>
-
-              <div
-                style={{
-                  fontSize: 46,
-                  fontWeight: 900,
-                  letterSpacing: -1,
-                  color: textColor,
-                  lineHeight: 1.05,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  textShadow: "0 10px 40px rgba(0,0,0,0.50)",
-                }}
-              >
-                {title}
-              </div>
-
-              <div
-                style={{
-                  fontSize: 22,
-                  color: "rgba(255,255,255,0.82)",
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                {subtitle}
-              </div>
-
-              <div style={{ display: "flex", gap: 10, marginTop: 6, flexWrap: "wrap" }}>
-                <div
-                  style={{
-                    padding: "8px 12px",
-                    borderRadius: 14,
-                    border: "1px solid rgba(255,255,255,0.12)",
-                    background: "rgba(255,255,255,0.06)",
-                    color: "rgba(255,255,255,0.85)",
-                    fontSize: 16,
-                  }}
-                >
-                  {tag}
-                </div>
-
-                <div
-                  style={{
-                    padding: "8px 12px",
-                    borderRadius: 14,
-                    border: "1px solid rgba(124,58,237,0.30)",
-                    background: "rgba(124,58,237,0.10)",
-                    color: "rgba(255,255,255,0.90)",
-                    fontSize: 16,
-                  }}
-                >
-                  guild: {guildId || "?"}
-                </div>
-              </div>
-            </div>
-
-            {/* RIGHT: ACCENT STRIP */}
-            <div
-              style={{
-                width: 14,
-                height: "84%",
-                borderRadius: 999,
-                background: `linear-gradient(180deg, ${neonA}, ${neonB}, ${neonC})`,
-                opacity: 0.9,
-                boxShadow: "0 0 35px rgba(124,58,237,0.45)",
-              }}
-            />
-          </div>
-        </div>
-      ),
-      {
-        width: cardW,
-        height: cardH,
-        headers: {
-          // prevent “stuck” previews while you iterate
-          "Cache-Control": "no-store, max-age=0",
-          "Content-Type": "image/png",
-        },
-      }
+    // Query params your dashboard builds:
+    const serverName = asStr(searchParams.get("serverName"), "Server");
+    const username = asStr(searchParams.get("username"), "New Member");
+    const tag = asStr(searchParams.get("tag"), "");
+    const membercount = asStr(searchParams.get("membercount"), "");
+    const title = asStr(searchParams.get("title"), `${username} just joined`);
+    const subtitle = asStr(
+      searchParams.get("subtitle"),
+      membercount ? `Member #${membercount}` : "Welcome!"
     );
-  } catch (err) {
-    // If something explodes, return a tiny PNG-like error image as text (so you can see it in devtools)
-    const msg = String(err?.message || err || "Failed to render image.");
-    return new Response(
-      JSON.stringify({ ok: false, error: msg }),
-      {
-        status: 500,
-        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+
+    const serverIconUrl = asStr(searchParams.get("serverIconUrl"), "");
+    const avatarUrl = asStr(searchParams.get("avatarUrl"), "");
+    const backgroundUrl = asStr(searchParams.get("backgroundUrl"), "");
+
+    const backgroundColor = safeColor(searchParams.get("backgroundColor"), "#0b1020");
+    const textColor = safeColor(searchParams.get("textColor"), "#ffffff");
+    const overlayOpacity = clamp(asNum(searchParams.get("overlayOpacity"), 0.35), 0, 1);
+    const showAvatar = asBool(searchParams.get("showAvatar"), true);
+
+    // Canvas size (looks good in Discord, and in your dashboard preview)
+    const W = 1024;
+    const H = 360;
+    const canvas = createCanvas(W, H);
+    const ctx = canvas.getContext("2d");
+
+    // --- Base: never-white stylish background ---
+    // 1) gradient base
+    const grad = ctx.createLinearGradient(0, 0, W, H);
+    grad.addColorStop(0, "#0b1020");
+    grad.addColorStop(0.55, "#070a12");
+    grad.addColorStop(1, "#120818");
+
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    // 2) subtle noise-ish dots (cheap, but effective)
+    ctx.globalAlpha = 0.07;
+    for (let i = 0; i < 2200; i++) {
+      const x = Math.random() * W;
+      const y = Math.random() * H;
+      const r = Math.random() * 1.4;
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // --- Card frame ---
+    const pad = 22;
+    const cardX = pad;
+    const cardY = pad;
+    const cardW = W - pad * 2;
+    const cardH = H - pad * 2;
+    const radius = 26;
+
+    // card background clip
+    ctx.save();
+    roundRect(ctx, cardX, cardY, cardW, cardH, radius);
+    ctx.clip();
+
+    // Fill fallback background color (so if bg image fails, it still looks good)
+    ctx.fillStyle = backgroundColor;
+    ctx.fillRect(cardX, cardY, cardW, cardH);
+
+    // Background image (cover)
+    const bgImg = await tryLoadImage(backgroundUrl);
+    if (bgImg) {
+      drawCover(ctx, bgImg, cardX, cardY, cardW, cardH);
+    }
+
+    // Overlay for readability
+    ctx.fillStyle = `rgba(0,0,0,${overlayOpacity})`;
+    ctx.fillRect(cardX, cardY, cardW, cardH);
+
+    // Neon accent slashes (unique “WoC” vibe)
+    ctx.globalAlpha = 0.9;
+    ctx.lineWidth = 10;
+    ctx.strokeStyle = "rgba(124,58,237,0.55)";
+    ctx.beginPath();
+    ctx.moveTo(cardX + cardW * 0.62, cardY - 20);
+    ctx.lineTo(cardX + cardW * 0.92, cardY + cardH + 20);
+    ctx.stroke();
+
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = "rgba(244,63,94,0.35)";
+    ctx.beginPath();
+    ctx.moveTo(cardX + cardW * 0.55, cardY - 20);
+    ctx.lineTo(cardX + cardW * 0.85, cardY + cardH + 20);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Top glow bar
+    const topGrad = ctx.createLinearGradient(cardX, cardY, cardX + cardW, cardY);
+    topGrad.addColorStop(0, "rgba(124,58,237,0.55)");
+    topGrad.addColorStop(0.5, "rgba(59,130,246,0.25)");
+    topGrad.addColorStop(1, "rgba(244,63,94,0.45)");
+    ctx.fillStyle = topGrad;
+    ctx.fillRect(cardX, cardY, cardW, 8);
+
+    ctx.restore();
+
+    // Frame border
+    ctx.strokeStyle = "rgba(255,255,255,0.14)";
+    ctx.lineWidth = 2;
+    roundRect(ctx, cardX, cardY, cardW, cardH, radius);
+    ctx.stroke();
+
+    // --- Icons (server + avatar) ---
+    const left = cardX + 28;
+    const top = cardY + 26;
+
+    // Server icon (circle)
+    const serverSize = 62;
+    const serverImg = await tryLoadImage(serverIconUrl);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(left + serverSize / 2, top + serverSize / 2, serverSize / 2, 0, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
+    if (serverImg) {
+      ctx.drawImage(serverImg, left, top, serverSize, serverSize);
+    } else {
+      // fallback: gradient disc
+      const g2 = ctx.createLinearGradient(left, top, left + serverSize, top + serverSize);
+      g2.addColorStop(0, "rgba(124,58,237,0.9)");
+      g2.addColorStop(1, "rgba(244,63,94,0.75)");
+      ctx.fillStyle = g2;
+      ctx.fillRect(left, top, serverSize, serverSize);
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.font = "700 20px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(serverName.slice(0, 1).toUpperCase(), left + serverSize / 2, top + serverSize / 2);
+    }
+    ctx.restore();
+
+    // Avatar (right side)
+    const avatarSize = 104;
+    const avatarX = cardX + cardW - avatarSize - 34;
+    const avatarY = cardY + (cardH - avatarSize) / 2;
+
+    if (showAvatar) {
+      const avImg = await tryLoadImage(avatarUrl);
+      // ring
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(avatarX + avatarSize / 2, avatarY + avatarSize / 2, avatarSize / 2 + 6, 0, Math.PI * 2);
+      ctx.closePath();
+      const ringGrad = ctx.createLinearGradient(avatarX, avatarY, avatarX + avatarSize, avatarY + avatarSize);
+      ringGrad.addColorStop(0, "rgba(124,58,237,0.9)");
+      ringGrad.addColorStop(1, "rgba(244,63,94,0.8)");
+      ctx.strokeStyle = ringGrad;
+      ctx.lineWidth = 8;
+      ctx.stroke();
+      ctx.restore();
+
+      // avatar circle
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(avatarX + avatarSize / 2, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.clip();
+      if (avImg) {
+        ctx.drawImage(avImg, avatarX, avatarY, avatarSize, avatarSize);
+      } else {
+        ctx.fillStyle = "rgba(255,255,255,0.08)";
+        ctx.fillRect(avatarX, avatarY, avatarSize, avatarSize);
       }
+      ctx.restore();
+    }
+
+    // --- Text ---
+    const textLeft = left + serverSize + 18;
+    const textMaxW = (showAvatar ? avatarX : cardX + cardW) - textLeft - 28;
+
+    // Server name + tag row
+    ctx.fillStyle = "rgba(255,255,255,0.78)";
+    ctx.font = "600 16px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(serverName, textLeft, top + 4);
+
+    if (tag) {
+      const tagText = tag.startsWith("@") ? tag : `@${tag}`;
+      ctx.fillStyle = "rgba(255,255,255,0.45)";
+      ctx.font = "600 14px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto";
+      ctx.fillText(tagText, textLeft, top + 26);
+    }
+
+    // Big title
+    ctx.fillStyle = textColor;
+    ctx.font = "800 40px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto";
+    // soft shadow
+    ctx.shadowColor = "rgba(0,0,0,0.55)";
+    ctx.shadowBlur = 18;
+    ctx.shadowOffsetY = 4;
+
+    // Basic truncate to fit width
+    let t = title;
+    while (ctx.measureText(t).width > textMaxW && t.length > 6) t = t.slice(0, -2);
+    if (t !== title) t = t.slice(0, -1) + "…";
+
+    ctx.fillText(t, textLeft, top + 70);
+
+    // Subtitle
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.fillStyle = "rgba(255,255,255,0.75)";
+    ctx.font = "600 18px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto";
+
+    let st = subtitle;
+    while (ctx.measureText(st).width > textMaxW && st.length > 6) st = st.slice(0, -2);
+    if (st !== subtitle) st = st.slice(0, -1) + "…";
+
+    ctx.fillText(st, textLeft, top + 126);
+
+    // Footer “signature”
+    ctx.fillStyle = "rgba(255,255,255,0.35)";
+    ctx.font = "600 14px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto";
+    ctx.fillText("World of Communities • Welcome System", textLeft, cardY + cardH - 34);
+
+    const png = canvas.toBuffer("image/png");
+
+    return new NextResponse(png, {
+      status: 200,
+      headers: {
+        "Content-Type": "image/png",
+        "Cache-Control": "no-store, max-age=0",
+      },
+    });
+  } catch (err) {
+    // If something *still* explodes, return a readable JSON error so you can see it in the browser.
+    return NextResponse.json(
+      {
+        error: "welcome-card route failed",
+        message: String(err?.message || err),
+      },
+      { status: 500 }
     );
   }
 }
