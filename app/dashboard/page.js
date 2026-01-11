@@ -162,7 +162,9 @@ function IconCircle({ guild, size = 40 }) {
           className="w-full h-full object-cover"
         />
       ) : (
-        <span className="text-xs font-semibold text-[var(--text-muted)]">{label}</span>
+        <span className="text-xs font-semibold text-[var(--text-muted)]">
+          {label}
+        </span>
       )}
     </div>
   );
@@ -255,7 +257,9 @@ function GuildPicker({ guilds, value, onChange, disabled }) {
             );
           })}
           {!guilds.length ? (
-            <div className="px-3 py-3 text-sm text-[var(--text-muted)]">No servers found.</div>
+            <div className="px-3 py-3 text-sm text-[var(--text-muted)]">
+              No servers found.
+            </div>
           ) : null}
         </div>
       ) : null}
@@ -291,7 +295,11 @@ function ChannelPicker({
         disabled ? "opacity-60 cursor-not-allowed" : ""
       )}
     >
-      {allowNone ? <option value="">{noneLabel}</option> : <option value="">{placeholder}</option>}
+      {allowNone ? (
+        <option value="">{noneLabel}</option>
+      ) : (
+        <option value="">{placeholder}</option>
+      )}
       {list.map((c) => (
         <option key={c.id} value={c.id}>
           #{c.name}
@@ -525,36 +533,66 @@ function isSubEnabled(modules, catKey, subKey) {
   return typeof v === "boolean" ? v : true;
 }
 
+/**
+ * Normalise welcome.type so UI + bot always agree.
+ * Supported:
+ *   message | embed | embed_text | card
+ * Backwards compat:
+ *   embed+text -> embed_text
+ *   both -> embed_text
+ */
+function normalizeWelcomeType(raw) {
+  const t = String(raw || "").trim().toLowerCase();
+  if (!t) return "message";
+  if (t === "embed+text") return "embed_text";
+  if (t === "embed_text") return "embed_text";
+  if (t === "both") return "embed_text";
+  if (t === "message") return "message";
+  if (t === "embed") return "embed";
+  if (t === "card") return "card";
+  return "message";
+}
+
 function ensureWelcomeDefaults(welcome) {
   const w = welcome && typeof welcome === "object" ? deepClone(welcome) : {};
+
   if (typeof w.enabled !== "boolean") w.enabled = false;
-  if (typeof w.type !== "string") w.type = "message"; // message | embed | embed+text | card
+  w.type = normalizeWelcomeType(w.type);
+
   if (typeof w.channelId !== "string") w.channelId = "";
   if (typeof w.message !== "string") w.message = "Welcome {user} to **{server}**! ✨";
   if (typeof w.autoRoleId !== "string") w.autoRoleId = "";
+  if (typeof w.dmEnabled !== "boolean") w.dmEnabled = false;
 
-  // Embed config (Dyno-ish starter)
+  // Embed config (matches bot handler keys: welcome.embed.{title,url,description,color,thumbnailUrl,imageUrl,author:{},footer:{}...})
   w.embed ||= {};
   if (typeof w.embed.title !== "string") w.embed.title = "Welcome!";
-  if (typeof w.embed.description !== "string")
-    w.embed.description = "Welcome {user} to **{server}**!";
+  if (typeof w.embed.url !== "string") w.embed.url = "";
+  if (typeof w.embed.description !== "string") w.embed.description = "Welcome {user} to **{server}**!";
   if (typeof w.embed.color !== "string") w.embed.color = "#7c3aed";
   if (typeof w.embed.thumbnailUrl !== "string") w.embed.thumbnailUrl = "{avatar}";
   if (typeof w.embed.imageUrl !== "string") w.embed.imageUrl = "";
-  if (typeof w.embed.footerText !== "string") w.embed.footerText = "Member #{membercount}";
-  if (typeof w.embed.authorName !== "string") w.embed.authorName = "{server}";
-  if (typeof w.embed.authorIconUrl !== "string") w.embed.authorIconUrl = "";
+  if (typeof w.embed.author !== "object" || !w.embed.author) w.embed.author = {};
+  if (typeof w.embed.author.name !== "string") w.embed.author.name = "{server}";
+  if (typeof w.embed.author.iconUrl !== "string") w.embed.author.iconUrl = "";
+  if (typeof w.embed.author.url !== "string") w.embed.author.url = "";
+  if (typeof w.embed.footer !== "object" || !w.embed.footer) w.embed.footer = {};
+  if (typeof w.embed.footer.text !== "string") w.embed.footer.text = "Member #{membercount}";
+  if (typeof w.embed.footer.iconUrl !== "string") w.embed.footer.iconUrl = "";
+  if (!Array.isArray(w.embed.fields)) w.embed.fields = [];
 
   // Card config (Mee6-ish starter)
   w.card ||= {};
   if (typeof w.card.enabled !== "boolean") w.card.enabled = false;
-  if (typeof w.card.title !== "string") w.card.title = "{username} just joined the server";
+  if (typeof w.card.title !== "string") w.card.title = "{user.name} just joined the server";
   if (typeof w.card.subtitle !== "string") w.card.subtitle = "Member #{membercount}";
   if (typeof w.card.backgroundColor !== "string") w.card.backgroundColor = "#0b1020";
   if (typeof w.card.textColor !== "string") w.card.textColor = "#ffffff";
   if (typeof w.card.overlayOpacity !== "number") w.card.overlayOpacity = 0.35;
+  if (typeof w.card.backgroundUrl !== "string") w.card.backgroundUrl = "";
+  if (typeof w.card.showAvatar !== "boolean") w.card.showAvatar = true;
 
-  // If type is card, keep card enabled in sync
+  // Keep in sync
   if (w.type === "card") w.card.enabled = true;
 
   return w;
@@ -584,6 +622,7 @@ function ensureDefaultSettings(guildId) {
       channelId: "",
       message: "Welcome {user} to **{server}**! ✨",
       autoRoleId: "",
+      dmEnabled: false,
     }),
     modules: defaultModules,
     personality: { mood: "story", sass: 35, narration: true },
@@ -1014,12 +1053,8 @@ export default function DashboardPage() {
     });
   }, [channels]);
 
-  const debugStatusUrl = isSnowflake(canonicalGuildId)
-    ? `${STATUS_ENDPOINT(canonicalGuildId)}`
-    : "";
-  const debugChannelsUrl = isSnowflake(canonicalGuildId)
-    ? `${CHANNELS_ENDPOINT(canonicalGuildId)}`
-    : "";
+  const debugStatusUrl = isSnowflake(canonicalGuildId) ? `${STATUS_ENDPOINT(canonicalGuildId)}` : "";
+  const debugChannelsUrl = isSnowflake(canonicalGuildId) ? `${CHANNELS_ENDPOINT(canonicalGuildId)}` : "";
 
   return (
     <div className="max-w-7xl mx-auto px-6 lg:px-10 py-12">
@@ -1593,7 +1628,7 @@ export default function DashboardPage() {
                               {[
                                 ["message", "Message"],
                                 ["embed", "Embed"],
-                                ["embed+text", "Embed + Text"],
+                                ["embed_text", "Embed + Text"],
                                 ["card", "Card"],
                               ].map(([val, label]) => (
                                 <button
@@ -1602,21 +1637,21 @@ export default function DashboardPage() {
                                   onClick={() => {
                                     setSettings((s) => ({
                                       ...s,
-                                      welcome: {
+                                      welcome: ensureWelcomeDefaults({
                                         ...s.welcome,
                                         type: val,
                                         card: {
-                                          ...s.welcome.card,
+                                          ...(s.welcome?.card || {}),
                                           enabled: val === "card",
                                         },
-                                      },
+                                      }),
                                     }));
                                     setDirty(true);
                                   }}
                                   className={cx(
                                     "px-3 py-2 rounded-full border text-xs",
                                     "border-[var(--border-subtle)]/70",
-                                    settings.welcome?.type === val
+                                    normalizeWelcomeType(settings.welcome?.type) === val
                                       ? "bg-[color-mix(in_oklab,var(--accent-soft)_55%,transparent)]"
                                       : "bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] hover:bg-[color-mix(in_oklab,var(--bg-card)_85%,transparent)]"
                                   )}
@@ -1627,21 +1662,47 @@ export default function DashboardPage() {
                             </div>
 
                             <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
-                              Tokens: {"{user}"} {"{server}"} {"{username}"} {"{tag}"} {"{membercount}"} {"{id}"} {"{avatar}"}
+                              Tokens: {"{user}"} {"{mention}"} {"{username}"} {"{user.name}"} {"{tag}"} {"{server}"}{" "}
+                              {"{server.name}"} {"{membercount}"} {"{server.member_count}"} {"{id}"} {"{avatar}"}
                             </div>
                           </div>
 
+                          {/* Optional DM */}
+                          <label className="woc-card p-4 sm:col-span-2 flex items-start justify-between gap-3 cursor-pointer">
+                            <div>
+                              <div className="font-semibold text-sm">Send welcome in DM</div>
+                              <div className="text-xs text-[var(--text-muted)] mt-1">
+                                Sends the same welcome payload to the user’s DMs.
+                              </div>
+                            </div>
+                            <input
+                              type="checkbox"
+                              className="mt-1"
+                              checked={!!settings.welcome?.dmEnabled}
+                              onChange={(e) => {
+                                setSettings((s) => ({
+                                  ...s,
+                                  welcome: ensureWelcomeDefaults({ ...s.welcome, dmEnabled: e.target.checked }),
+                                }));
+                                setDirty(true);
+                              }}
+                            />
+                          </label>
+
                           {/* Text message editor (Message or Embed + Text) */}
-                          {["message", "embed+text"].includes(settings.welcome?.type || "message") ? (
+                          {["message", "embed_text"].includes(normalizeWelcomeType(settings.welcome?.type)) ? (
                             <label className="woc-card p-4 sm:col-span-2">
                               <div className="font-semibold text-sm">Welcome message</div>
                               <div className="text-xs text-[var(--text-muted)] mt-1">
-                                Tokens: <b>{"{user}"}</b>, <b>{"{server}"}</b>, <b>{"{membercount}"}</b>
+                                Tokens: <b>{"{user}"}</b>, <b>{"{server}"}</b>, <b>{"{membercount}"}</b>, <b>{"{tag}"}</b>
                               </div>
                               <textarea
                                 value={settings.welcome?.message || ""}
                                 onChange={(e) => {
-                                  setSettings((s) => ({ ...s, welcome: { ...s.welcome, message: e.target.value } }));
+                                  setSettings((s) => ({
+                                    ...s,
+                                    welcome: ensureWelcomeDefaults({ ...s.welcome, message: e.target.value }),
+                                  }));
                                   setDirty(true);
                                 }}
                                 className="
@@ -1657,7 +1718,7 @@ export default function DashboardPage() {
                           ) : null}
 
                           {/* Embed editor (Embed or Embed + Text) */}
-                          {["embed", "embed+text"].includes(settings.welcome?.type || "message") ? (
+                          {["embed", "embed_text"].includes(normalizeWelcomeType(settings.welcome?.type)) ? (
                             <div className="woc-card p-4 sm:col-span-2 space-y-3">
                               <div className="font-semibold text-sm">Embed options</div>
 
@@ -1669,7 +1730,10 @@ export default function DashboardPage() {
                                     onChange={(e) => {
                                       setSettings((s) => ({
                                         ...s,
-                                        welcome: { ...s.welcome, embed: { ...s.welcome.embed, title: e.target.value } },
+                                        welcome: ensureWelcomeDefaults({
+                                          ...s.welcome,
+                                          embed: { ...(s.welcome?.embed || {}), title: e.target.value },
+                                        }),
                                       }));
                                       setDirty(true);
                                     }}
@@ -1678,18 +1742,42 @@ export default function DashboardPage() {
                                 </label>
 
                                 <label>
-                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Color</div>
+                                  <div className="text-xs mb-1 text-[var(--text-muted)]">URL</div>
                                   <input
-                                    type="color"
-                                    value={settings.welcome?.embed?.color || "#7c3aed"}
+                                    value={settings.welcome?.embed?.url || ""}
                                     onChange={(e) => {
                                       setSettings((s) => ({
                                         ...s,
-                                        welcome: { ...s.welcome, embed: { ...s.welcome.embed, color: e.target.value } },
+                                        welcome: ensureWelcomeDefaults({
+                                          ...s.welcome,
+                                          embed: { ...(s.welcome?.embed || {}), url: e.target.value },
+                                        }),
                                       }));
                                       setDirty(true);
                                     }}
+                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
+                                    placeholder="https://..."
                                   />
+                                </label>
+
+                                <label className="flex items-center gap-3">
+                                  <div>
+                                    <div className="text-xs mb-1 text-[var(--text-muted)]">Color</div>
+                                    <input
+                                      type="color"
+                                      value={settings.welcome?.embed?.color || "#7c3aed"}
+                                      onChange={(e) => {
+                                        setSettings((s) => ({
+                                          ...s,
+                                          welcome: ensureWelcomeDefaults({
+                                            ...s.welcome,
+                                            embed: { ...(s.welcome?.embed || {}), color: e.target.value },
+                                          }),
+                                        }));
+                                        setDirty(true);
+                                      }}
+                                    />
+                                  </div>
                                 </label>
 
                                 <label className="sm:col-span-2">
@@ -1699,14 +1787,58 @@ export default function DashboardPage() {
                                     onChange={(e) => {
                                       setSettings((s) => ({
                                         ...s,
-                                        welcome: {
+                                        welcome: ensureWelcomeDefaults({
                                           ...s.welcome,
-                                          embed: { ...s.welcome.embed, description: e.target.value },
-                                        },
+                                          embed: { ...(s.welcome?.embed || {}), description: e.target.value },
+                                        }),
                                       }));
                                       setDirty(true);
                                     }}
                                     className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none min-h-[90px]"
+                                  />
+                                </label>
+
+                                <label>
+                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Author name</div>
+                                  <input
+                                    value={settings.welcome?.embed?.author?.name || ""}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: ensureWelcomeDefaults({
+                                          ...s.welcome,
+                                          embed: {
+                                            ...(s.welcome?.embed || {}),
+                                            author: { ...(s.welcome?.embed?.author || {}), name: e.target.value },
+                                          },
+                                        }),
+                                      }));
+                                      setDirty(true);
+                                    }}
+                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
+                                    placeholder="{server}"
+                                  />
+                                </label>
+
+                                <label>
+                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Author icon URL</div>
+                                  <input
+                                    value={settings.welcome?.embed?.author?.iconUrl || ""}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: ensureWelcomeDefaults({
+                                          ...s.welcome,
+                                          embed: {
+                                            ...(s.welcome?.embed || {}),
+                                            author: { ...(s.welcome?.embed?.author || {}), iconUrl: e.target.value },
+                                          },
+                                        }),
+                                      }));
+                                      setDirty(true);
+                                    }}
+                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
+                                    placeholder="{avatar}"
                                   />
                                 </label>
 
@@ -1717,10 +1849,10 @@ export default function DashboardPage() {
                                     onChange={(e) => {
                                       setSettings((s) => ({
                                         ...s,
-                                        welcome: {
+                                        welcome: ensureWelcomeDefaults({
                                           ...s.welcome,
-                                          embed: { ...s.welcome.embed, thumbnailUrl: e.target.value },
-                                        },
+                                          embed: { ...(s.welcome?.embed || {}), thumbnailUrl: e.target.value },
+                                        }),
                                       }));
                                       setDirty(true);
                                     }}
@@ -1736,10 +1868,10 @@ export default function DashboardPage() {
                                     onChange={(e) => {
                                       setSettings((s) => ({
                                         ...s,
-                                        welcome: {
+                                        welcome: ensureWelcomeDefaults({
                                           ...s.welcome,
-                                          embed: { ...s.welcome.embed, imageUrl: e.target.value },
-                                        },
+                                          embed: { ...(s.welcome?.embed || {}), imageUrl: e.target.value },
+                                        }),
                                       }));
                                       setDirty(true);
                                     }}
@@ -1749,16 +1881,19 @@ export default function DashboardPage() {
                                 </label>
 
                                 <label>
-                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Footer</div>
+                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Footer text</div>
                                   <input
-                                    value={settings.welcome?.embed?.footerText || ""}
+                                    value={settings.welcome?.embed?.footer?.text || ""}
                                     onChange={(e) => {
                                       setSettings((s) => ({
                                         ...s,
-                                        welcome: {
+                                        welcome: ensureWelcomeDefaults({
                                           ...s.welcome,
-                                          embed: { ...s.welcome.embed, footerText: e.target.value },
-                                        },
+                                          embed: {
+                                            ...(s.welcome?.embed || {}),
+                                            footer: { ...(s.welcome?.embed?.footer || {}), text: e.target.value },
+                                          },
+                                        }),
                                       }));
                                       setDirty(true);
                                     }}
@@ -1768,36 +1903,62 @@ export default function DashboardPage() {
                                 </label>
 
                                 <label>
-                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Author name</div>
+                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Footer icon URL</div>
                                   <input
-                                    value={settings.welcome?.embed?.authorName || ""}
+                                    value={settings.welcome?.embed?.footer?.iconUrl || ""}
                                     onChange={(e) => {
                                       setSettings((s) => ({
                                         ...s,
-                                        welcome: {
+                                        welcome: ensureWelcomeDefaults({
                                           ...s.welcome,
-                                          embed: { ...s.welcome.embed, authorName: e.target.value },
-                                        },
+                                          embed: {
+                                            ...(s.welcome?.embed || {}),
+                                            footer: { ...(s.welcome?.embed?.footer || {}), iconUrl: e.target.value },
+                                          },
+                                        }),
                                       }));
                                       setDirty(true);
                                     }}
                                     className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
-                                    placeholder="{server}"
+                                    placeholder="https://..."
                                   />
                                 </label>
+                              </div>
+
+                              <div className="text-[0.72rem] text-[var(--text-muted)]">
+                                Fields editor can be added next (Dyno style: name/value/inline). Your bot already supports it.
                               </div>
                             </div>
                           ) : null}
 
                           {/* Card editor */}
-                          {settings.welcome?.type === "card" ? (
+                          {normalizeWelcomeType(settings.welcome?.type) === "card" ? (
                             <div className="woc-card p-5 sm:col-span-2">
                               <div className="font-semibold text-sm">Welcome card</div>
                               <div className="text-xs text-[var(--text-muted)] mt-1">
-                                Sends a visual welcome card when a member joins.
+                                Sends a visual-style card (embed-based for now) when a member joins.
                               </div>
 
                               <div className="grid gap-3 sm:grid-cols-2 mt-4">
+                                <label className="sm:col-span-2">
+                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Background image URL (optional)</div>
+                                  <input
+                                    value={settings.welcome?.card?.backgroundUrl || ""}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: ensureWelcomeDefaults({
+                                          ...s.welcome,
+                                          card: { ...(s.welcome?.card || {}), backgroundUrl: e.target.value },
+                                        }),
+                                      }));
+                                      setDirty(true);
+                                    }}
+                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
+                                    placeholder="https://..."
+                                  />
+                                </label>
+
                                 <label>
                                   <div className="text-xs mb-1 text-[var(--text-muted)]">Title</div>
                                   <input
@@ -1805,10 +1966,10 @@ export default function DashboardPage() {
                                     onChange={(e) => {
                                       setSettings((s) => ({
                                         ...s,
-                                        welcome: {
+                                        welcome: ensureWelcomeDefaults({
                                           ...s.welcome,
-                                          card: { ...s.welcome.card, title: e.target.value },
-                                        },
+                                          card: { ...(s.welcome?.card || {}), title: e.target.value },
+                                        }),
                                       }));
                                       setDirty(true);
                                     }}
@@ -1823,10 +1984,10 @@ export default function DashboardPage() {
                                     onChange={(e) => {
                                       setSettings((s) => ({
                                         ...s,
-                                        welcome: {
+                                        welcome: ensureWelcomeDefaults({
                                           ...s.welcome,
-                                          card: { ...s.welcome.card, subtitle: e.target.value },
-                                        },
+                                          card: { ...(s.welcome?.card || {}), subtitle: e.target.value },
+                                        }),
                                       }));
                                       setDirty(true);
                                     }}
@@ -1843,10 +2004,10 @@ export default function DashboardPage() {
                                       onChange={(e) => {
                                         setSettings((s) => ({
                                           ...s,
-                                          welcome: {
+                                          welcome: ensureWelcomeDefaults({
                                             ...s.welcome,
-                                            card: { ...s.welcome.card, backgroundColor: e.target.value },
-                                          },
+                                            card: { ...(s.welcome?.card || {}), backgroundColor: e.target.value },
+                                          }),
                                         }));
                                         setDirty(true);
                                       }}
@@ -1863,10 +2024,10 @@ export default function DashboardPage() {
                                       onChange={(e) => {
                                         setSettings((s) => ({
                                           ...s,
-                                          welcome: {
+                                          welcome: ensureWelcomeDefaults({
                                             ...s.welcome,
-                                            card: { ...s.welcome.card, textColor: e.target.value },
-                                          },
+                                            card: { ...(s.welcome?.card || {}), textColor: e.target.value },
+                                          }),
                                         }));
                                         setDirty(true);
                                       }}
@@ -1890,14 +2051,38 @@ export default function DashboardPage() {
                                     onChange={(e) => {
                                       setSettings((s) => ({
                                         ...s,
-                                        welcome: {
+                                        welcome: ensureWelcomeDefaults({
                                           ...s.welcome,
-                                          card: { ...s.welcome.card, overlayOpacity: Number(e.target.value) },
-                                        },
+                                          card: { ...(s.welcome?.card || {}), overlayOpacity: Number(e.target.value) },
+                                        }),
                                       }));
                                       setDirty(true);
                                     }}
                                     className="w-full"
+                                  />
+                                </label>
+
+                                <label className="sm:col-span-2 flex items-start justify-between gap-3 cursor-pointer">
+                                  <div>
+                                    <div className="font-semibold text-sm">Show avatar</div>
+                                    <div className="text-xs text-[var(--text-muted)] mt-1">
+                                      Uses the user avatar as the card thumbnail.
+                                    </div>
+                                  </div>
+                                  <input
+                                    type="checkbox"
+                                    className="mt-1"
+                                    checked={settings.welcome?.card?.showAvatar !== false}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: ensureWelcomeDefaults({
+                                          ...s.welcome,
+                                          card: { ...(s.welcome?.card || {}), showAvatar: e.target.checked },
+                                        }),
+                                      }));
+                                      setDirty(true);
+                                    }}
                                   />
                                 </label>
                               </div>
@@ -1912,7 +2097,10 @@ export default function DashboardPage() {
                             <input
                               value={settings.welcome?.autoRoleId || ""}
                               onChange={(e) => {
-                                setSettings((s) => ({ ...s, welcome: { ...s.welcome, autoRoleId: e.target.value } }));
+                                setSettings((s) => ({
+                                  ...s,
+                                  welcome: ensureWelcomeDefaults({ ...s.welcome, autoRoleId: e.target.value }),
+                                }));
                                 setDirty(true);
                               }}
                               className="
