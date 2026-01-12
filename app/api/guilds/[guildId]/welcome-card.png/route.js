@@ -1,7 +1,7 @@
 import { ImageResponse } from "next/og";
 
 export const dynamic = "force-dynamic";
-export const runtime = "nodejs"; // keep nodejs so Buffer/base64 is easy & reliable
+export const runtime = "edge"; // ✅ important
 
 function isSnowflake(id) {
   const s = String(id || "").trim();
@@ -22,7 +22,6 @@ function getGuildId(req, ctx) {
   const fromParams = ctx?.params?.guildId;
   const fromQuery = url.searchParams.get("guildId");
 
-  // Safety: sometimes params can be empty; parse from pathname too
   const m = url.pathname.match(/\/api\/guilds\/([^/]+)\/welcome-card\.png$/i);
   const fromPath = m?.[1];
 
@@ -50,11 +49,20 @@ function hexToRgb(hex) {
   return { r, g, b };
 }
 
+// Edge-safe base64 (no Buffer)
+function arrayBufferToBase64(ab) {
+  const bytes = new Uint8Array(ab);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
 async function fetchImageAsDataUrl(inputUrl, { timeoutMs = 2500, maxBytes = 2_500_000 } = {}) {
   const u = String(inputUrl || "").trim();
   if (!u) return "";
-
-  // Only allow http(s)
   if (!/^https?:\/\//i.test(u)) return "";
 
   const ac = new AbortController();
@@ -63,7 +71,6 @@ async function fetchImageAsDataUrl(inputUrl, { timeoutMs = 2500, maxBytes = 2_50
   try {
     const res = await fetch(u, {
       signal: ac.signal,
-      // Some CDNs require a UA/referrer; keep it simple but "real".
       headers: {
         "User-Agent": "Mozilla/5.0 (WoC Welcome Card Renderer)",
         Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
@@ -72,7 +79,7 @@ async function fetchImageAsDataUrl(inputUrl, { timeoutMs = 2500, maxBytes = 2_50
 
     const ct = (res.headers.get("content-type") || "").toLowerCase();
     if (!res.ok) return "";
-    if (!ct.startsWith("image/")) return ""; // If Freepik returns HTML, ignore it
+    if (!ct.startsWith("image/")) return "";
 
     const len = Number(res.headers.get("content-length") || 0);
     if (len && len > maxBytes) return "";
@@ -80,7 +87,7 @@ async function fetchImageAsDataUrl(inputUrl, { timeoutMs = 2500, maxBytes = 2_50
     const ab = await res.arrayBuffer();
     if (ab.byteLength > maxBytes) return "";
 
-    const b64 = Buffer.from(ab).toString("base64");
+    const b64 = arrayBufferToBase64(ab);
     return `data:${ct};base64,${b64}`;
   } catch {
     return "";
@@ -91,10 +98,8 @@ async function fetchImageAsDataUrl(inputUrl, { timeoutMs = 2500, maxBytes = 2_50
 
 export async function GET(req, ctx) {
   const url = new URL(req.url);
-
   const guildId = getGuildId(req, ctx);
 
-  // 🔎 Debug mode: proves what Next is passing + what we parsed
   if (url.searchParams.get("debug") === "1") {
     return Response.json(
       {
@@ -114,40 +119,32 @@ export async function GET(req, ctx) {
     return Response.json(
       {
         error: "Missing guildId",
-        hint: "Use /api/guilds/<guildId>/welcome-card.png or ?guildId=<guildId>. Add ?debug=1 to inspect.",
-        got: {
-          pathname: url.pathname,
-          params: ctx?.params ?? null,
-          queryGuildId: url.searchParams.get("guildId") || null,
-        },
+        hint: "Use /api/guilds/<guildId>/welcome-card.png or ?guildId=<guildId>",
       },
       { status: 400 }
     );
   }
 
-  // Read inputs
   const serverName = url.searchParams.get("serverName") || "Server";
   const username = url.searchParams.get("username") || "New Member";
   const tag = url.searchParams.get("tag") || "";
   const membercount = url.searchParams.get("membercount") || "";
 
   const title = url.searchParams.get("title") || `${username} just joined the server`;
-  const subtitle = url.searchParams.get("subtitle") || (membercount ? `Member #${membercount}` : "");
+  const subtitle =
+    url.searchParams.get("subtitle") || (membercount ? `Member #${membercount}` : "");
 
   const backgroundUrl = url.searchParams.get("backgroundUrl") || "";
   const serverIconUrl = url.searchParams.get("serverIconUrl") || "";
   const avatarUrl = url.searchParams.get("avatarUrl") || "";
   const showAvatar = url.searchParams.get("showAvatar") === "true";
 
-  // ✅ Force non-white defaults
   const backgroundColor = safeHex(url.searchParams.get("backgroundColor"), "#0b1020");
   const textColor = safeHex(url.searchParams.get("textColor"), "#ffffff");
   const overlayOpacity = clamp01(url.searchParams.get("overlayOpacity"), 0.35);
 
   const { r, g, b } = hexToRgb(backgroundColor);
 
-  // 🔥 Critical: prefetch remote images and only embed if they are truly images.
-  // This avoids Freepik/blocked hotlinks returning HTML and breaking the render.
   const [bgDataUrl, iconDataUrl, avatarDataUrl] = await Promise.all([
     fetchImageAsDataUrl(backgroundUrl),
     fetchImageAsDataUrl(serverIconUrl),
@@ -165,28 +162,20 @@ export async function GET(req, ctx) {
           justifyContent: "space-between",
           padding: "48px",
           position: "relative",
-          backgroundColor, // if everything else fails, still not white
+          backgroundColor,
           color: textColor,
           fontFamily: "system-ui, Segoe UI, Inter, Arial",
           overflow: "hidden",
         }}
       >
-        {/* Background image (only if we successfully fetched it as an actual image) */}
         {bgDataUrl ? (
           <img
             src={bgDataUrl}
             alt=""
-            style={{
-              position: "absolute",
-              inset: 0,
-              width: "100%",
-              height: "100%",
-              objectFit: "cover",
-            }}
+            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
           />
         ) : null}
 
-        {/* Overlay (tint) */}
         <div
           style={{
             position: "absolute",
@@ -195,85 +184,37 @@ export async function GET(req, ctx) {
           }}
         />
 
-        {/* Subtle border glow so even “no images” looks intentional */}
-        <div
-          style={{
-            position: "absolute",
-            inset: "18px",
-            borderRadius: "28px",
-            border: "1px solid rgba(255,255,255,0.14)",
-          }}
-        />
-
-        {/* Left: server */}
-        <div
-          style={{
-            position: "relative",
-            display: "flex",
-            gap: "18px",
-            alignItems: "center",
-            minWidth: "320px",
-          }}
-        >
+        <div style={{ position: "relative", display: "flex", gap: "18px", alignItems: "center", minWidth: "320px" }}>
           {iconDataUrl ? (
             <img src={iconDataUrl} alt="" width="84" height="84" style={{ borderRadius: "24px" }} />
           ) : (
-            <div
-              style={{
-                width: "84px",
-                height: "84px",
-                borderRadius: "24px",
-                backgroundColor: "rgba(255,255,255,0.12)",
-              }}
-            />
+            <div style={{ width: "84px", height: "84px", borderRadius: "24px", backgroundColor: "rgba(255,255,255,0.12)" }} />
           )}
 
           <div style={{ display: "flex", flexDirection: "column" }}>
             <div style={{ fontSize: "22px", opacity: 0.95 }}>{serverName}</div>
             <div style={{ fontSize: "14px", opacity: 0.75 }}>
-              {tag ? `${tag} • ` : ""}
-              guildId: {guildId}
+              {tag ? `${tag} • ` : ""}guildId: {guildId}
             </div>
           </div>
         </div>
 
-        {/* Middle text */}
         <div style={{ position: "relative", flex: 1, padding: "0 32px" }}>
           <div style={{ fontSize: "44px", fontWeight: 800, lineHeight: 1.1 }}>{title}</div>
-          {subtitle ? (
-            <div style={{ fontSize: "22px", marginTop: "10px", opacity: 0.9 }}>{subtitle}</div>
-          ) : null}
+          {subtitle ? <div style={{ fontSize: "22px", marginTop: "10px", opacity: 0.9 }}>{subtitle}</div> : null}
         </div>
 
-        {/* Right: avatar */}
-        <div
-          style={{
-            position: "relative",
-            width: "160px",
-            display: "flex",
-            justifyContent: "flex-end",
-          }}
-        >
+        <div style={{ position: "relative", width: "160px", display: "flex", justifyContent: "flex-end" }}>
           {showAvatar && avatarDataUrl ? (
             <img
               src={avatarDataUrl}
               alt=""
               width="120"
               height="120"
-              style={{
-                borderRadius: "36px",
-                border: "3px solid rgba(255,255,255,0.25)",
-              }}
+              style={{ borderRadius: "36px", border: "3px solid rgba(255,255,255,0.25)" }}
             />
           ) : (
-            <div
-              style={{
-                width: "120px",
-                height: "120px",
-                borderRadius: "36px",
-                backgroundColor: "rgba(255,255,255,0.12)",
-              }}
-            />
+            <div style={{ width: "120px", height: "120px", borderRadius: "36px", backgroundColor: "rgba(255,255,255,0.12)" }} />
           )}
         </div>
       </div>
