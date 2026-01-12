@@ -14,10 +14,6 @@ const STATUS_ENDPOINT = (gid) => `/api/guilds/${encodeURIComponent(gid)}/status`
 const SETTINGS_ENDPOINT = (gid) => `/api/guilds/${encodeURIComponent(gid)}/settings`;
 const CHANNELS_ENDPOINT = (gid) => `/api/guilds/${encodeURIComponent(gid)}/channels`;
 
-// ✅ Step 3: PNG render endpoint (Mee6-style)
-const WELCOME_CARD_PNG_ENDPOINT = (gid) =>
-  `/api/guilds/${encodeURIComponent(gid)}/welcome-card.png`;
-
 // Fallback endpoint (some builds use this style)
 const DISCORD_CHANNELS_FALLBACK = (gid) =>
   `/api/discord/channels?guildId=${encodeURIComponent(gid)}`;
@@ -315,6 +311,80 @@ function ChannelPicker({
   );
 }
 
+/* -----------------------------
+   NEW: Welcome card helpers
+------------------------------ */
+
+function applyTokens(template, ctx) {
+  const s = String(template || "");
+  const map = {
+    "{user}": ctx?.mention || ctx?.username || "",
+    "{mention}": ctx?.mention || "",
+    "{username}": ctx?.username || "",
+    "{user.name}": ctx?.username || "",
+    "{tag}": ctx?.tag || "",
+    "{server}": ctx?.serverName || "",
+    "{server.name}": ctx?.serverName || "",
+    "{membercount}": ctx?.membercount || "",
+    "{server.member_count}": ctx?.membercount || "",
+    "{id}": ctx?.userId || "",
+    "{avatar}": ctx?.avatarUrl || "",
+  };
+
+  let out = s;
+  for (const [k, v] of Object.entries(map)) {
+    out = out.split(k).join(String(v ?? ""));
+  }
+  return out;
+}
+
+function buildWelcomeCardPreviewUrl({
+  guildId,
+  serverName,
+  serverIconUrl,
+  card,
+  nowBuster,
+}) {
+  if (!isSnowflake(guildId)) return "";
+
+  // Preview persona
+  const preview = {
+    username: "Preview Member",
+    tag: "Preview#230001",
+    membercount: "123",
+    mention: "@PreviewMember",
+    avatarUrl: "https://cdn.discordapp.com/embed/avatars/0.png",
+    userId: "123456789012345678",
+    serverName: serverName || "Server",
+  };
+
+  const title = applyTokens(card?.title || "{user.name} just joined the server", preview);
+  const subtitle = applyTokens(card?.subtitle || "Member #{membercount}", preview);
+
+  const params = new URLSearchParams();
+  params.set("serverName", preview.serverName);
+  params.set("serverIconUrl", serverIconUrl || "");
+  params.set("username", preview.username);
+  params.set("tag", preview.tag);
+  params.set("membercount", preview.membercount);
+
+  params.set("title", title);
+  params.set("subtitle", subtitle);
+
+  if (card?.backgroundUrl) params.set("backgroundUrl", String(card.backgroundUrl));
+  if (card?.backgroundColor) params.set("backgroundColor", String(card.backgroundColor));
+  if (card?.textColor) params.set("textColor", String(card.textColor));
+  params.set("overlayOpacity", String(Number(card?.overlayOpacity ?? 0.35)));
+
+  params.set("showAvatar", card?.showAvatar === false ? "false" : "true");
+  params.set("avatarUrl", preview.avatarUrl);
+
+  // Cache buster so you always see the latest
+  params.set("_", String(nowBuster || Date.now()));
+
+  return `/api/guilds/${encodeURIComponent(guildId)}/welcome-card.png?${params.toString()}`;
+}
+
 /**
  * Modules based on your command folders.
  */
@@ -375,7 +445,7 @@ const MODULE_TREE = [
       { key: "raidboss", label: "Raid Boss", desc: "Boss raids." },
       { key: "raidattack", label: "Raid Attack", desc: "Raid actions." },
       { key: "clanboss", label: "Clan Boss", desc: "Clan boss fights." },
-      { key: "exam", label: "Exam combat challenges." },
+      { key: "exam", label: "Exam", desc: "Exam combat challenges." },
       { key: "duelstats", label: "Duel Stats", desc: "Stats + records." },
       { key: "examleaderboard", label: "Exam Leaderboard", desc: "Rankings." },
       { key: "examclanrank", label: "Exam Clan Rank", desc: "Clan ranking." },
@@ -436,7 +506,7 @@ const MODULE_TREE = [
     desc: "Family system + trees.",
     subs: [
       { key: "marry", label: "Marry", desc: "Marriage flow." },
-      { key: "divorce", label: "Divorce flow." },
+      { key: "divorce", label: "Divorce", desc: "Divorce flow." },
       { key: "adopt", label: "Adopt", desc: "Adoption." },
       { key: "children", label: "Children", desc: "Children list." },
       { key: "parent", label: "Parent", desc: "Parent system." },
@@ -568,7 +638,7 @@ function ensureWelcomeDefaults(welcome) {
   if (typeof w.autoRoleId !== "string") w.autoRoleId = "";
   if (typeof w.dmEnabled !== "boolean") w.dmEnabled = false;
 
-  // Embed config (matches bot handler keys: welcome.embed.{title,url,description,color,thumbnailUrl,imageUrl,author:{},footer:{}...})
+  // Embed config
   w.embed ||= {};
   if (typeof w.embed.title !== "string") w.embed.title = "Welcome!";
   if (typeof w.embed.url !== "string") w.embed.url = "";
@@ -585,7 +655,7 @@ function ensureWelcomeDefaults(welcome) {
   if (typeof w.embed.footer.iconUrl !== "string") w.embed.footer.iconUrl = "";
   if (!Array.isArray(w.embed.fields)) w.embed.fields = [];
 
-  // Card config (Mee6-ish starter)
+  // Card config
   w.card ||= {};
   if (typeof w.card.enabled !== "boolean") w.card.enabled = false;
   if (typeof w.card.title !== "string") w.card.title = "{user.name} just joined the server";
@@ -631,43 +701,6 @@ function ensureDefaultSettings(guildId) {
     modules: defaultModules,
     personality: { mood: "story", sass: 35, narration: true },
   };
-}
-
-// ✅ Step 3 helper: build the PNG preview URL with query params
-function buildWelcomeCardPreviewUrl({ guildId, selectedGuild, card, userPreview }) {
-  if (!guildId) return "";
-
-  const params = new URLSearchParams();
-
-  // Server details
-  params.set("serverName", selectedGuild?.name || "Server");
-  if (selectedGuild?.id && selectedGuild?.icon) {
-    params.set(
-      "serverIconUrl",
-      `https://cdn.discordapp.com/icons/${selectedGuild.id}/${selectedGuild.icon}.png?size=128`
-    );
-  }
-
-  // Fake preview user
-  params.set("userName", userPreview?.userName || "New Member");
-  params.set("tag", userPreview?.tag || "NewMember#0001");
-  params.set("memberCount", userPreview?.memberCount || "1337");
-  params.set(
-    "avatarUrl",
-    userPreview?.avatarUrl || "https://cdn.discordapp.com/embed/avatars/0.png"
-  );
-
-  // Card settings
-  params.set("title", card?.title || "{username} joined {server}");
-  params.set("subtitle", card?.subtitle || "Member #{membercount}");
-  params.set("backgroundColor", card?.backgroundColor || "#0b1020");
-  params.set("textColor", card?.textColor || "#ffffff");
-  params.set("overlayOpacity", String(card?.overlayOpacity ?? 0.35));
-  params.set("showAvatar", String(card?.showAvatar !== false));
-
-  if (card?.backgroundUrl) params.set("backgroundUrl", card.backgroundUrl);
-
-  return `${WELCOME_CARD_PNG_ENDPOINT(guildId)}?${params.toString()}`;
 }
 
 export default function DashboardPage() {
@@ -740,8 +773,9 @@ export default function DashboardPage() {
   const [moduleCategory, setModuleCategory] = useState("moderation");
   const [moduleSearch, setModuleSearch] = useState("");
 
-  // ✅ Step 3: preview refresh key
-  const [previewKey, setPreviewKey] = useState(0);
+  // NEW: card preview state
+  const [cardPreviewNonce, setCardPreviewNonce] = useState(Date.now());
+  const [cardPreviewError, setCardPreviewError] = useState("");
 
   const clientIdRaw = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || "";
   const clientId = String(clientIdRaw || "").trim();
@@ -1100,6 +1134,23 @@ export default function DashboardPage() {
   const debugStatusUrl = isSnowflake(canonicalGuildId) ? `${STATUS_ENDPOINT(canonicalGuildId)}` : "";
   const debugChannelsUrl = isSnowflake(canonicalGuildId) ? `${CHANNELS_ENDPOINT(canonicalGuildId)}` : "";
 
+  const previewServerIcon = guildIconUrl(selectedGuild) || "";
+  const previewUrl = useMemo(() => {
+    if (!gateInstalled) return "";
+    if (!settings?.welcome) return "";
+    if (!isSnowflake(canonicalGuildId)) return "";
+    if (normalizeWelcomeType(settings.welcome?.type) !== "card") return "";
+
+    const card = settings.welcome?.card || {};
+    return buildWelcomeCardPreviewUrl({
+      guildId: canonicalGuildId,
+      serverName: selectedGuild?.name || "Server",
+      serverIconUrl: previewServerIcon,
+      card,
+      nowBuster: cardPreviewNonce,
+    });
+  }, [gateInstalled, settings, canonicalGuildId, selectedGuild, previewServerIcon, cardPreviewNonce]);
+
   return (
     <div className="max-w-7xl mx-auto px-6 lg:px-10 py-12">
       <div className="woc-card p-6 sm:p-8">
@@ -1217,6 +1268,8 @@ export default function DashboardPage() {
                       setSubtab("overview");
                       woc?.setMood?.("story");
                       setModuleSearch("");
+                      setCardPreviewError("");
+                      setCardPreviewNonce(Date.now());
                     }}
                   />
                 </div>
@@ -1691,6 +1744,8 @@ export default function DashboardPage() {
                                       }),
                                     }));
                                     setDirty(true);
+                                    setCardPreviewError("");
+                                    setCardPreviewNonce(Date.now());
                                   }}
                                   className={cx(
                                     "px-3 py-2 rounded-full border text-xs",
@@ -1733,248 +1788,6 @@ export default function DashboardPage() {
                             />
                           </label>
 
-                          {/* Text message editor (Message or Embed + Text) */}
-                          {["message", "embed_text"].includes(normalizeWelcomeType(settings.welcome?.type)) ? (
-                            <label className="woc-card p-4 sm:col-span-2">
-                              <div className="font-semibold text-sm">Welcome message</div>
-                              <div className="text-xs text-[var(--text-muted)] mt-1">
-                                Tokens: <b>{"{user}"}</b>, <b>{"{server}"}</b>, <b>{"{membercount}"}</b>, <b>{"{tag}"}</b>
-                              </div>
-                              <textarea
-                                value={settings.welcome?.message || ""}
-                                onChange={(e) => {
-                                  setSettings((s) => ({
-                                    ...s,
-                                    welcome: ensureWelcomeDefaults({ ...s.welcome, message: e.target.value }),
-                                  }));
-                                  setDirty(true);
-                                }}
-                                className="
-                                  mt-3 w-full px-3 py-2 rounded-2xl min-h-[90px]
-                                  border border-[var(--border-subtle)]/70
-                                  bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
-                                  text-[var(--text-main)]
-                                  outline-none
-                                "
-                                placeholder="Welcome {user} to {server}!"
-                              />
-                            </label>
-                          ) : null}
-
-                          {/* Embed editor (Embed or Embed + Text) */}
-                          {["embed", "embed_text"].includes(normalizeWelcomeType(settings.welcome?.type)) ? (
-                            <div className="woc-card p-4 sm:col-span-2 space-y-3">
-                              <div className="font-semibold text-sm">Embed options</div>
-
-                              <div className="grid gap-3 sm:grid-cols-2">
-                                <label>
-                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Title</div>
-                                  <input
-                                    value={settings.welcome?.embed?.title || ""}
-                                    onChange={(e) => {
-                                      setSettings((s) => ({
-                                        ...s,
-                                        welcome: ensureWelcomeDefaults({
-                                          ...s.welcome,
-                                          embed: { ...(s.welcome?.embed || {}), title: e.target.value },
-                                        }),
-                                      }));
-                                      setDirty(true);
-                                    }}
-                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
-                                  />
-                                </label>
-
-                                <label>
-                                  <div className="text-xs mb-1 text-[var(--text-muted)]">URL</div>
-                                  <input
-                                    value={settings.welcome?.embed?.url || ""}
-                                    onChange={(e) => {
-                                      setSettings((s) => ({
-                                        ...s,
-                                        welcome: ensureWelcomeDefaults({
-                                          ...s.welcome,
-                                          embed: { ...(s.welcome?.embed || {}), url: e.target.value },
-                                        }),
-                                      }));
-                                      setDirty(true);
-                                    }}
-                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
-                                    placeholder="https://..."
-                                  />
-                                </label>
-
-                                <label className="flex items-center gap-3">
-                                  <div>
-                                    <div className="text-xs mb-1 text-[var(--text-muted)]">Color</div>
-                                    <input
-                                      type="color"
-                                      value={settings.welcome?.embed?.color || "#7c3aed"}
-                                      onChange={(e) => {
-                                        setSettings((s) => ({
-                                          ...s,
-                                          welcome: ensureWelcomeDefaults({
-                                            ...s.welcome,
-                                            embed: { ...(s.welcome?.embed || {}), color: e.target.value },
-                                          }),
-                                        }));
-                                        setDirty(true);
-                                      }}
-                                    />
-                                  </div>
-                                </label>
-
-                                <label className="sm:col-span-2">
-                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Description</div>
-                                  <textarea
-                                    value={settings.welcome?.embed?.description || ""}
-                                    onChange={(e) => {
-                                      setSettings((s) => ({
-                                        ...s,
-                                        welcome: ensureWelcomeDefaults({
-                                          ...s.welcome,
-                                          embed: { ...(s.welcome?.embed || {}), description: e.target.value },
-                                        }),
-                                      }));
-                                      setDirty(true);
-                                    }}
-                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none min-h-[90px]"
-                                  />
-                                </label>
-
-                                <label>
-                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Author name</div>
-                                  <input
-                                    value={settings.welcome?.embed?.author?.name || ""}
-                                    onChange={(e) => {
-                                      setSettings((s) => ({
-                                        ...s,
-                                        welcome: ensureWelcomeDefaults({
-                                          ...s.welcome,
-                                          embed: {
-                                            ...(s.welcome?.embed || {}),
-                                            author: { ...(s.welcome?.embed?.author || {}), name: e.target.value },
-                                          },
-                                        }),
-                                      }));
-                                      setDirty(true);
-                                    }}
-                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
-                                    placeholder="{server}"
-                                  />
-                                </label>
-
-                                <label>
-                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Author icon URL</div>
-                                  <input
-                                    value={settings.welcome?.embed?.author?.iconUrl || ""}
-                                    onChange={(e) => {
-                                      setSettings((s) => ({
-                                        ...s,
-                                        welcome: ensureWelcomeDefaults({
-                                          ...s.welcome,
-                                          embed: {
-                                            ...(s.welcome?.embed || {}),
-                                            author: { ...(s.welcome?.embed?.author || {}), iconUrl: e.target.value },
-                                          },
-                                        }),
-                                      }));
-                                      setDirty(true);
-                                    }}
-                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
-                                    placeholder="{avatar}"
-                                  />
-                                </label>
-
-                                <label>
-                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Thumbnail URL</div>
-                                  <input
-                                    value={settings.welcome?.embed?.thumbnailUrl || ""}
-                                    onChange={(e) => {
-                                      setSettings((s) => ({
-                                        ...s,
-                                        welcome: ensureWelcomeDefaults({
-                                          ...s.welcome,
-                                          embed: { ...(s.welcome?.embed || {}), thumbnailUrl: e.target.value },
-                                        }),
-                                      }));
-                                      setDirty(true);
-                                    }}
-                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
-                                    placeholder="{avatar}"
-                                  />
-                                </label>
-
-                                <label>
-                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Image URL</div>
-                                  <input
-                                    value={settings.welcome?.embed?.imageUrl || ""}
-                                    onChange={(e) => {
-                                      setSettings((s) => ({
-                                        ...s,
-                                        welcome: ensureWelcomeDefaults({
-                                          ...s.welcome,
-                                          embed: { ...(s.welcome?.embed || {}), imageUrl: e.target.value },
-                                        }),
-                                      }));
-                                      setDirty(true);
-                                    }}
-                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
-                                    placeholder="https://..."
-                                  />
-                                </label>
-
-                                <label>
-                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Footer text</div>
-                                  <input
-                                    value={settings.welcome?.embed?.footer?.text || ""}
-                                    onChange={(e) => {
-                                      setSettings((s) => ({
-                                        ...s,
-                                        welcome: ensureWelcomeDefaults({
-                                          ...s.welcome,
-                                          embed: {
-                                            ...(s.welcome?.embed || {}),
-                                            footer: { ...(s.welcome?.embed?.footer || {}), text: e.target.value },
-                                          },
-                                        }),
-                                      }));
-                                      setDirty(true);
-                                    }}
-                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
-                                    placeholder="Member #{membercount}"
-                                  />
-                                </label>
-
-                                <label>
-                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Footer icon URL</div>
-                                  <input
-                                    value={settings.welcome?.embed?.footer?.iconUrl || ""}
-                                    onChange={(e) => {
-                                      setSettings((s) => ({
-                                        ...s,
-                                        welcome: ensureWelcomeDefaults({
-                                          ...s.welcome,
-                                          embed: {
-                                            ...(s.welcome?.embed || {}),
-                                            footer: { ...(s.welcome?.embed?.footer || {}), iconUrl: e.target.value },
-                                          },
-                                        }),
-                                      }));
-                                      setDirty(true);
-                                    }}
-                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
-                                    placeholder="https://..."
-                                  />
-                                </label>
-                              </div>
-
-                              <div className="text-[0.72rem] text-[var(--text-muted)]">
-                                Fields editor can be added next (Dyno style: name/value/inline). Your bot already supports it.
-                              </div>
-                            </div>
-                          ) : null}
-
                           {/* Card editor */}
                           {normalizeWelcomeType(settings.welcome?.type) === "card" ? (
                             <div className="woc-card p-5 sm:col-span-2">
@@ -1997,11 +1810,15 @@ export default function DashboardPage() {
                                         }),
                                       }));
                                       setDirty(true);
-                                      setPreviewKey((k) => k + 1);
+                                      setCardPreviewError("");
+                                      setCardPreviewNonce(Date.now());
                                     }}
                                     className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
                                     placeholder="https://..."
                                   />
+                                  <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
+                                    Tip: Some sites block hotlinking (Freepik often does). If it fails, the renderer will fall back to your background color.
+                                  </div>
                                 </label>
 
                                 <label>
@@ -2017,7 +1834,8 @@ export default function DashboardPage() {
                                         }),
                                       }));
                                       setDirty(true);
-                                      setPreviewKey((k) => k + 1);
+                                      setCardPreviewError("");
+                                      setCardPreviewNonce(Date.now());
                                     }}
                                     className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
                                   />
@@ -2036,7 +1854,8 @@ export default function DashboardPage() {
                                         }),
                                       }));
                                       setDirty(true);
-                                      setPreviewKey((k) => k + 1);
+                                      setCardPreviewError("");
+                                      setCardPreviewNonce(Date.now());
                                     }}
                                     className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
                                   />
@@ -2057,7 +1876,8 @@ export default function DashboardPage() {
                                           }),
                                         }));
                                         setDirty(true);
-                                        setPreviewKey((k) => k + 1);
+                                        setCardPreviewError("");
+                                        setCardPreviewNonce(Date.now());
                                       }}
                                     />
                                   </div>
@@ -2078,7 +1898,8 @@ export default function DashboardPage() {
                                           }),
                                         }));
                                         setDirty(true);
-                                        setPreviewKey((k) => k + 1);
+                                        setCardPreviewError("");
+                                        setCardPreviewNonce(Date.now());
                                       }}
                                     />
                                   </div>
@@ -2106,7 +1927,8 @@ export default function DashboardPage() {
                                         }),
                                       }));
                                       setDirty(true);
-                                      setPreviewKey((k) => k + 1);
+                                      setCardPreviewError("");
+                                      setCardPreviewNonce(Date.now());
                                     }}
                                     className="w-full"
                                   />
@@ -2132,80 +1954,78 @@ export default function DashboardPage() {
                                         }),
                                       }));
                                       setDirty(true);
-                                      setPreviewKey((k) => k + 1);
+                                      setCardPreviewError("");
+                                      setCardPreviewNonce(Date.now());
                                     }}
                                   />
                                 </label>
-                              </div>
 
-                              {/* ✅ Step 3: Live PNG preview */}
-                              <div className="mt-5 woc-card p-4">
-                                <div className="flex items-start justify-between gap-3">
-                                  <div>
-                                    <div className="font-semibold text-sm">Live preview</div>
-                                    <div className="text-xs text-[var(--text-muted)] mt-1">
-                                      Renders a real PNG via{" "}
-                                      <span className="font-semibold text-[var(--text-main)]">
-                                        /api/guilds/[guildId]/welcome-card.png
-                                      </span>
-                                      . If the route isn’t deployed yet, it will look broken until you add it.
+                                {/* ✅ Live preview */}
+                                <div className="sm:col-span-2 woc-card p-4 mt-2">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                      <div className="font-semibold text-sm">Live preview</div>
+                                      <div className="text-xs text-[var(--text-muted)] mt-1">
+                                        Renders a real PNG via <code>/api/guilds/[guildId]/welcome-card.png</code>.
+                                      </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        type="button"
+                                        className="woc-btn-ghost text-xs"
+                                        onClick={() => {
+                                          setCardPreviewError("");
+                                          setCardPreviewNonce(Date.now());
+                                        }}
+                                      >
+                                        Refresh
+                                      </button>
+
+                                      {previewUrl ? (
+                                        <a
+                                          className="woc-btn-ghost text-xs"
+                                          href={previewUrl}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                        >
+                                          Open
+                                        </a>
+                                      ) : null}
                                     </div>
                                   </div>
 
-                                  <button
-                                    type="button"
-                                    className="woc-btn-ghost text-xs"
-                                    onClick={() => {
-                                      setPreviewKey((k) => k + 1);
-                                      showToast("Preview refreshed ✨", "playful");
-                                    }}
-                                  >
-                                    Refresh
-                                  </button>
-                                </div>
+                                  {cardPreviewError ? (
+                                    <div className="mt-3 text-xs text-rose-200/90 bg-rose-500/10 border border-rose-400/30 rounded-xl p-3">
+                                      <div className="font-semibold">Preview error</div>
+                                      <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{cardPreviewError}</div>
+                                    </div>
+                                  ) : null}
 
-                                {(() => {
-                                  const previewUrl = buildWelcomeCardPreviewUrl({
-                                    guildId: canonicalGuildId,
-                                    selectedGuild,
-                                    card: settings.welcome?.card || {},
-                                    userPreview: {
-                                      userName: "Preview Member",
-                                      tag: "PreviewMember#0001",
-                                      memberCount: String(
-                                        selectedGuild?.approximate_member_count ||
-                                          selectedGuild?.memberCount ||
-                                          1337
-                                      ),
-                                      avatarUrl: "https://cdn.discordapp.com/embed/avatars/2.png",
-                                    },
-                                  });
-
-                                  const src = previewUrl
-                                    ? `${previewUrl}&t=${Date.now()}&k=${previewKey}`
-                                    : "";
-
-                                  return src ? (
-                                    <div className="mt-3">
-                                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <div className="mt-3 rounded-2xl overflow-hidden border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_80%,transparent)]">
+                                    {previewUrl ? (
+                                      // eslint-disable-next-line @next/next/no-img-element
                                       <img
-                                        src={src}
+                                        src={previewUrl}
                                         alt="Welcome card preview"
-                                        className="w-full rounded-2xl border border-[var(--border-subtle)]/70 overflow-hidden"
+                                        className="w-full h-auto block"
+                                        onError={() => {
+                                          setCardPreviewError("Image failed to load. Check the PNG request in Network for status + content-type.");
+                                        }}
                                       />
-                                      <div className="mt-2 text-[0.72rem] text-[var(--text-muted)] break-all">
-                                        Endpoint:{" "}
-                                        <span className="font-semibold text-[var(--text-main)]">
-                                          {previewUrl}
-                                        </span>
+                                    ) : (
+                                      <div className="p-4 text-sm text-[var(--text-muted)]">
+                                        Preview unavailable (pick a server + set type to Card).
                                       </div>
+                                    )}
+                                  </div>
+
+                                  {previewUrl ? (
+                                    <div className="mt-3 text-[0.72rem] text-[var(--text-muted)] break-all">
+                                      Endpoint: <code>{previewUrl}</code>
                                     </div>
-                                  ) : (
-                                    <div className="mt-3 text-xs text-amber-200/90">
-                                      Pick a server first to preview.
-                                    </div>
-                                  );
-                                })()}
+                                  ) : null}
+                                </div>
                               </div>
                             </div>
                           ) : null}

@@ -1,7 +1,7 @@
 import { ImageResponse } from "next/og";
 
-export const runtime = "edge";
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs"; // keep nodejs so Buffer/base64 is easy & reliable
 
 function isSnowflake(id) {
   const s = String(id || "").trim();
@@ -22,6 +22,7 @@ function getGuildId(req, ctx) {
   const fromParams = ctx?.params?.guildId;
   const fromQuery = url.searchParams.get("guildId");
 
+  // Safety: sometimes params can be empty; parse from pathname too
   const m = url.pathname.match(/\/api\/guilds\/([^/]+)\/welcome-card\.png$/i);
   const fromPath = m?.[1];
 
@@ -49,6 +50,45 @@ function hexToRgb(hex) {
   return { r, g, b };
 }
 
+async function fetchImageAsDataUrl(inputUrl, { timeoutMs = 2500, maxBytes = 2_500_000 } = {}) {
+  const u = String(inputUrl || "").trim();
+  if (!u) return "";
+
+  // Only allow http(s)
+  if (!/^https?:\/\//i.test(u)) return "";
+
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(u, {
+      signal: ac.signal,
+      // Some CDNs require a UA/referrer; keep it simple but "real".
+      headers: {
+        "User-Agent": "Mozilla/5.0 (WoC Welcome Card Renderer)",
+        Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+      },
+    });
+
+    const ct = (res.headers.get("content-type") || "").toLowerCase();
+    if (!res.ok) return "";
+    if (!ct.startsWith("image/")) return ""; // If Freepik returns HTML, ignore it
+
+    const len = Number(res.headers.get("content-length") || 0);
+    if (len && len > maxBytes) return "";
+
+    const ab = await res.arrayBuffer();
+    if (ab.byteLength > maxBytes) return "";
+
+    const b64 = Buffer.from(ab).toString("base64");
+    return `data:${ct};base64,${b64}`;
+  } catch {
+    return "";
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 export async function GET(req, ctx) {
   const url = new URL(req.url);
 
@@ -74,8 +114,7 @@ export async function GET(req, ctx) {
     return Response.json(
       {
         error: "Missing guildId",
-        hint:
-          "Use /api/guilds/<guildId>/welcome-card.png or ?guildId=<guildId>. Add ?debug=1 to inspect.",
+        hint: "Use /api/guilds/<guildId>/welcome-card.png or ?guildId=<guildId>. Add ?debug=1 to inspect.",
         got: {
           pathname: url.pathname,
           params: ctx?.params ?? null,
@@ -92,59 +131,54 @@ export async function GET(req, ctx) {
   const tag = url.searchParams.get("tag") || "";
   const membercount = url.searchParams.get("membercount") || "";
 
-  const title =
-    url.searchParams.get("title") || `${username} just joined the server`;
-  const subtitle =
-    url.searchParams.get("subtitle") ||
-    (membercount ? `Member #${membercount}` : "");
+  const title = url.searchParams.get("title") || `${username} just joined the server`;
+  const subtitle = url.searchParams.get("subtitle") || (membercount ? `Member #${membercount}` : "");
 
   const backgroundUrl = url.searchParams.get("backgroundUrl") || "";
   const serverIconUrl = url.searchParams.get("serverIconUrl") || "";
   const avatarUrl = url.searchParams.get("avatarUrl") || "";
   const showAvatar = url.searchParams.get("showAvatar") === "true";
 
-  // ✅ Force non-white defaults (even if params are missing)
-  const backgroundColor = safeHex(
-    url.searchParams.get("backgroundColor"),
-    "#0b1020"
-  );
+  // ✅ Force non-white defaults
+  const backgroundColor = safeHex(url.searchParams.get("backgroundColor"), "#0b1020");
   const textColor = safeHex(url.searchParams.get("textColor"), "#ffffff");
-  const overlayOpacity = clamp01(
-    url.searchParams.get("overlayOpacity"),
-    0.35
-  );
+  const overlayOpacity = clamp01(url.searchParams.get("overlayOpacity"), 0.35);
 
   const { r, g, b } = hexToRgb(backgroundColor);
+
+  // 🔥 Critical: prefetch remote images and only embed if they are truly images.
+  // This avoids Freepik/blocked hotlinks returning HTML and breaking the render.
+  const [bgDataUrl, iconDataUrl, avatarDataUrl] = await Promise.all([
+    fetchImageAsDataUrl(backgroundUrl),
+    fetchImageAsDataUrl(serverIconUrl),
+    fetchImageAsDataUrl(avatarUrl),
+  ]);
 
   return new ImageResponse(
     (
       <div
         style={{
-          width: 1200,
-          height: 400,
+          width: "1200px",
+          height: "400px",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: 48,
+          padding: "48px",
           position: "relative",
-
-          // If everything else fails, THIS still paints dark.
-          backgroundColor,
+          backgroundColor, // if everything else fails, still not white
           color: textColor,
           fontFamily: "system-ui, Segoe UI, Inter, Arial",
+          overflow: "hidden",
         }}
       >
-        {/* Background image */}
-        {backgroundUrl ? (
+        {/* Background image (only if we successfully fetched it as an actual image) */}
+        {bgDataUrl ? (
           <img
-            src={backgroundUrl}
+            src={bgDataUrl}
             alt=""
             style={{
               position: "absolute",
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
+              inset: 0,
               width: "100%",
               height: "100%",
               objectFit: "cover",
@@ -152,15 +186,22 @@ export async function GET(req, ctx) {
           />
         ) : null}
 
-        {/* Overlay */}
+        {/* Overlay (tint) */}
         <div
           style={{
             position: "absolute",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
+            inset: 0,
             backgroundColor: `rgba(${r},${g},${b},${overlayOpacity})`,
+          }}
+        />
+
+        {/* Subtle border glow so even “no images” looks intentional */}
+        <div
+          style={{
+            position: "absolute",
+            inset: "18px",
+            borderRadius: "28px",
+            border: "1px solid rgba(255,255,255,0.14)",
           }}
         />
 
@@ -169,47 +210,38 @@ export async function GET(req, ctx) {
           style={{
             position: "relative",
             display: "flex",
-            gap: 18,
+            gap: "18px",
             alignItems: "center",
-            minWidth: 320,
+            minWidth: "320px",
           }}
         >
-          {serverIconUrl ? (
-            <img
-              src={serverIconUrl}
-              alt=""
-              width={84}
-              height={84}
-              style={{ borderRadius: 24 }}
-            />
+          {iconDataUrl ? (
+            <img src={iconDataUrl} alt="" width="84" height="84" style={{ borderRadius: "24px" }} />
           ) : (
             <div
               style={{
-                width: 84,
-                height: 84,
-                borderRadius: 24,
+                width: "84px",
+                height: "84px",
+                borderRadius: "24px",
                 backgroundColor: "rgba(255,255,255,0.12)",
               }}
             />
           )}
 
           <div style={{ display: "flex", flexDirection: "column" }}>
-            <div style={{ fontSize: 22, opacity: 0.92 }}>{serverName}</div>
-            <div style={{ fontSize: 14, opacity: 0.75 }}>
-              {tag ? `${tag} • ` : ""}guildId: {guildId}
+            <div style={{ fontSize: "22px", opacity: 0.95 }}>{serverName}</div>
+            <div style={{ fontSize: "14px", opacity: 0.75 }}>
+              {tag ? `${tag} • ` : ""}
+              guildId: {guildId}
             </div>
           </div>
         </div>
 
         {/* Middle text */}
         <div style={{ position: "relative", flex: 1, padding: "0 32px" }}>
-          <div style={{ fontSize: 44, fontWeight: 800, lineHeight: 1.1 }}>
-            {title}
-          </div>
+          <div style={{ fontSize: "44px", fontWeight: 800, lineHeight: 1.1 }}>{title}</div>
           {subtitle ? (
-            <div style={{ fontSize: 22, marginTop: 10, opacity: 0.9 }}>
-              {subtitle}
-            </div>
+            <div style={{ fontSize: "22px", marginTop: "10px", opacity: 0.9 }}>{subtitle}</div>
           ) : null}
         </div>
 
@@ -217,28 +249,28 @@ export async function GET(req, ctx) {
         <div
           style={{
             position: "relative",
-            width: 160,
+            width: "160px",
             display: "flex",
             justifyContent: "flex-end",
           }}
         >
-          {showAvatar && avatarUrl ? (
+          {showAvatar && avatarDataUrl ? (
             <img
-              src={avatarUrl}
+              src={avatarDataUrl}
               alt=""
-              width={120}
-              height={120}
+              width="120"
+              height="120"
               style={{
-                borderRadius: 36,
+                borderRadius: "36px",
                 border: "3px solid rgba(255,255,255,0.25)",
               }}
             />
           ) : (
             <div
               style={{
-                width: 120,
-                height: 120,
-                borderRadius: 36,
+                width: "120px",
+                height: "120px",
+                borderRadius: "36px",
                 backgroundColor: "rgba(255,255,255,0.12)",
               }}
             />
@@ -251,7 +283,9 @@ export async function GET(req, ctx) {
       height: 400,
       headers: {
         "Content-Type": "image/png",
-        "Cache-Control": "no-store",
+        "Cache-Control": "no-store, max-age=0, must-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
       },
     }
   );
