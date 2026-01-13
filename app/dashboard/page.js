@@ -18,6 +18,10 @@ const CHANNELS_ENDPOINT = (gid) => `/api/guilds/${encodeURIComponent(gid)}/chann
 const DISCORD_CHANNELS_FALLBACK = (gid) =>
   `/api/discord/channels?guildId=${encodeURIComponent(gid)}`;
 
+// ✅ Welcome card PNG endpoint (App Router)
+const WELCOME_CARD_PNG_ENDPOINT = (gid) =>
+  `/api/guilds/${encodeURIComponent(gid)}/welcome-card.png`;
+
 function safeGet(key, fallback = "") {
   try {
     const v = localStorage.getItem(key);
@@ -311,80 +315,6 @@ function ChannelPicker({
   );
 }
 
-/* -----------------------------
-   NEW: Welcome card helpers
------------------------------- */
-
-function applyTokens(template, ctx) {
-  const s = String(template || "");
-  const map = {
-    "{user}": ctx?.mention || ctx?.username || "",
-    "{mention}": ctx?.mention || "",
-    "{username}": ctx?.username || "",
-    "{user.name}": ctx?.username || "",
-    "{tag}": ctx?.tag || "",
-    "{server}": ctx?.serverName || "",
-    "{server.name}": ctx?.serverName || "",
-    "{membercount}": ctx?.membercount || "",
-    "{server.member_count}": ctx?.membercount || "",
-    "{id}": ctx?.userId || "",
-    "{avatar}": ctx?.avatarUrl || "",
-  };
-
-  let out = s;
-  for (const [k, v] of Object.entries(map)) {
-    out = out.split(k).join(String(v ?? ""));
-  }
-  return out;
-}
-
-function buildWelcomeCardPreviewUrl({
-  guildId,
-  serverName,
-  serverIconUrl,
-  card,
-  nowBuster,
-}) {
-  if (!isSnowflake(guildId)) return "";
-
-  // Preview persona
-  const preview = {
-    username: "Preview Member",
-    tag: "Preview#230001",
-    membercount: "123",
-    mention: "@PreviewMember",
-    avatarUrl: "https://cdn.discordapp.com/embed/avatars/0.png",
-    userId: "123456789012345678",
-    serverName: serverName || "Server",
-  };
-
-  const title = applyTokens(card?.title || "{user.name} just joined the server", preview);
-  const subtitle = applyTokens(card?.subtitle || "Member #{membercount}", preview);
-
-  const params = new URLSearchParams();
-  params.set("serverName", preview.serverName);
-  params.set("serverIconUrl", serverIconUrl || "");
-  params.set("username", preview.username);
-  params.set("tag", preview.tag);
-  params.set("membercount", preview.membercount);
-
-  params.set("title", title);
-  params.set("subtitle", subtitle);
-
-  if (card?.backgroundUrl) params.set("backgroundUrl", String(card.backgroundUrl));
-  if (card?.backgroundColor) params.set("backgroundColor", String(card.backgroundColor));
-  if (card?.textColor) params.set("textColor", String(card.textColor));
-  params.set("overlayOpacity", String(Number(card?.overlayOpacity ?? 0.35)));
-
-  params.set("showAvatar", card?.showAvatar === false ? "false" : "true");
-  params.set("avatarUrl", preview.avatarUrl);
-
-  // Cache buster so you always see the latest
-  params.set("_", String(nowBuster || Date.now()));
-
-  return `/api/guilds/${encodeURIComponent(guildId)}/welcome-card.png?${params.toString()}`;
-}
-
 /**
  * Modules based on your command folders.
  */
@@ -483,7 +413,7 @@ const MODULE_TREE = [
     subs: [
       { key: "hug", label: "Hug", desc: "Hug interactions." },
       { key: "kiss", label: "Kiss", desc: "Kiss interactions." },
-      { key: "cuddle", label: "Cuddle", desc: "Cuddle interactions." },
+      { key: "cuddle", label: "Cuddle interactions." },
       { key: "pat", label: "Pat", desc: "Pat interactions." },
       { key: "slap", label: "Slap interactions." },
       { key: "punch", label: "Punch interactions." },
@@ -703,6 +633,50 @@ function ensureDefaultSettings(guildId) {
   };
 }
 
+// ✅ Build a welcome-card PNG URL (client-side safe)
+// Adds cache-bust param so refresh always fetches new image.
+function buildWelcomeCardPreviewUrl({
+  guildId,
+  serverName,
+  serverIconUrl,
+  username,
+  tag,
+  membercount,
+  avatarUrl,
+  title,
+  subtitle,
+  backgroundColor,
+  textColor,
+  overlayOpacity,
+  showAvatar,
+  backgroundUrl,
+  bust,
+}) {
+  if (!isSnowflake(guildId)) return "";
+  const params = new URLSearchParams();
+  if (serverName) params.set("serverName", serverName);
+  if (serverIconUrl) params.set("serverIconUrl", serverIconUrl);
+  if (username) params.set("username", username);
+  if (tag) params.set("tag", tag);
+  if (membercount) params.set("membercount", String(membercount));
+  if (avatarUrl) params.set("avatarUrl", avatarUrl);
+
+  if (title) params.set("title", title);
+  if (subtitle) params.set("subtitle", subtitle);
+
+  if (backgroundColor) params.set("backgroundColor", backgroundColor);
+  if (textColor) params.set("textColor", textColor);
+  if (typeof overlayOpacity === "number") params.set("overlayOpacity", String(overlayOpacity));
+  params.set("showAvatar", showAvatar ? "true" : "false");
+
+  if (backgroundUrl) params.set("backgroundUrl", backgroundUrl);
+
+  // Cache bust always last
+  params.set("_", String(bust || Date.now()));
+
+  return `${WELCOME_CARD_PNG_ENDPOINT(guildId)}?${params.toString()}`;
+}
+
 export default function DashboardPage() {
   let woc = null;
   try {
@@ -711,7 +685,7 @@ export default function DashboardPage() {
     woc = null;
   }
 
-  const { status } = useSession();
+  const { data: session, status } = useSession();
   const loading = status === "loading";
   const authed = status === "authenticated";
 
@@ -773,9 +747,9 @@ export default function DashboardPage() {
   const [moduleCategory, setModuleCategory] = useState("moderation");
   const [moduleSearch, setModuleSearch] = useState("");
 
-  // NEW: card preview state
-  const [cardPreviewNonce, setCardPreviewNonce] = useState(Date.now());
-  const [cardPreviewError, setCardPreviewError] = useState("");
+  // ✅ Welcome card preview state
+  const [welcomePreviewBust, setWelcomePreviewBust] = useState(Date.now());
+  const [welcomePreviewError, setWelcomePreviewError] = useState("");
 
   const clientIdRaw = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || "";
   const clientId = String(clientIdRaw || "").trim();
@@ -879,6 +853,7 @@ export default function DashboardPage() {
     if (!isSnowflake(canonicalGuildId)) return;
 
     setDirty(false);
+    setWelcomePreviewError("");
 
     if (perGuildAbortRef.current) perGuildAbortRef.current.abort();
     const ac = new AbortController();
@@ -935,6 +910,9 @@ export default function DashboardPage() {
           modules: mergedModules,
           welcome: mergedWelcome,
         });
+
+        // bump preview after settings load
+        setWelcomePreviewBust(Date.now());
       } catch (e) {
         if (e?.name === "AbortError") return;
         setSettings(ensureDefaultSettings(canonicalGuildId));
@@ -1047,6 +1025,7 @@ export default function DashboardPage() {
       });
       setDirty(false);
       showToast("Settings sealed. ✅", "playful");
+      setWelcomePreviewBust(Date.now());
     } catch (e) {
       showToast(safeErrorMessage(e?.message || "Save failed."), "omen");
     } finally {
@@ -1134,22 +1113,47 @@ export default function DashboardPage() {
   const debugStatusUrl = isSnowflake(canonicalGuildId) ? `${STATUS_ENDPOINT(canonicalGuildId)}` : "";
   const debugChannelsUrl = isSnowflake(canonicalGuildId) ? `${CHANNELS_ENDPOINT(canonicalGuildId)}` : "";
 
-  const previewServerIcon = guildIconUrl(selectedGuild) || "";
-  const previewUrl = useMemo(() => {
+  // ✅ Compute welcome card preview endpoint
+  const welcomeCardPreviewUrl = useMemo(() => {
     if (!gateInstalled) return "";
-    if (!settings?.welcome) return "";
     if (!isSnowflake(canonicalGuildId)) return "";
+    if (!settings?.welcome) return "";
     if (normalizeWelcomeType(settings.welcome?.type) !== "card") return "";
 
-    const card = settings.welcome?.card || {};
+    const guildName = selectedGuild?.name || "Server";
+    const guildIcon = guildIconUrl(selectedGuild) || "";
+
+    const userName =
+      String(session?.user?.name || session?.user?.email || "New Member").trim() || "New Member";
+    const userImage = String(session?.user?.image || "").trim();
+
+    // Try to pull something sensible for membercount
+    const membercount =
+      String(selectedGuild?.memberCount || selectedGuild?.member_count || "").trim() || "123";
+
+    const card = ensureWelcomeDefaults(settings.welcome).card;
+
     return buildWelcomeCardPreviewUrl({
       guildId: canonicalGuildId,
-      serverName: selectedGuild?.name || "Server",
-      serverIconUrl: previewServerIcon,
-      card,
-      nowBuster: cardPreviewNonce,
+      serverName: guildName,
+      serverIconUrl: guildIcon,
+      username: userName,
+      tag: "",
+
+      membercount,
+      avatarUrl: userImage,
+      title: card?.title || "{user.name} just joined the server",
+      subtitle: card?.subtitle || "Member #{membercount}",
+
+      backgroundColor: card?.backgroundColor || "#0b1020",
+      textColor: card?.textColor || "#ffffff",
+      overlayOpacity: Number(card?.overlayOpacity ?? 0.35),
+      showAvatar: card?.showAvatar !== false,
+      backgroundUrl: card?.backgroundUrl || "",
+
+      bust: welcomePreviewBust,
     });
-  }, [gateInstalled, settings, canonicalGuildId, selectedGuild, previewServerIcon, cardPreviewNonce]);
+  }, [gateInstalled, canonicalGuildId, settings, selectedGuild, session, welcomePreviewBust]);
 
   return (
     <div className="max-w-7xl mx-auto px-6 lg:px-10 py-12">
@@ -1268,8 +1272,8 @@ export default function DashboardPage() {
                       setSubtab("overview");
                       woc?.setMood?.("story");
                       setModuleSearch("");
-                      setCardPreviewError("");
-                      setCardPreviewNonce(Date.now());
+                      setWelcomePreviewError("");
+                      setWelcomePreviewBust(Date.now());
                     }}
                   />
                 </div>
@@ -1744,8 +1748,8 @@ export default function DashboardPage() {
                                       }),
                                     }));
                                     setDirty(true);
-                                    setCardPreviewError("");
-                                    setCardPreviewNonce(Date.now());
+                                    setWelcomePreviewError("");
+                                    setWelcomePreviewBust(Date.now());
                                   }}
                                   className={cx(
                                     "px-3 py-2 rounded-full border text-xs",
@@ -1788,6 +1792,248 @@ export default function DashboardPage() {
                             />
                           </label>
 
+                          {/* Text message editor */}
+                          {["message", "embed_text"].includes(normalizeWelcomeType(settings.welcome?.type)) ? (
+                            <label className="woc-card p-4 sm:col-span-2">
+                              <div className="font-semibold text-sm">Welcome message</div>
+                              <div className="text-xs text-[var(--text-muted)] mt-1">
+                                Tokens: <b>{"{user}"}</b>, <b>{"{server}"}</b>, <b>{"{membercount}"}</b>, <b>{"{tag}"}</b>
+                              </div>
+                              <textarea
+                                value={settings.welcome?.message || ""}
+                                onChange={(e) => {
+                                  setSettings((s) => ({
+                                    ...s,
+                                    welcome: ensureWelcomeDefaults({ ...s.welcome, message: e.target.value }),
+                                  }));
+                                  setDirty(true);
+                                }}
+                                className="
+                                  mt-3 w-full px-3 py-2 rounded-2xl min-h-[90px]
+                                  border border-[var(--border-subtle)]/70
+                                  bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                                  text-[var(--text-main)]
+                                  outline-none
+                                "
+                                placeholder="Welcome {user} to {server}!"
+                              />
+                            </label>
+                          ) : null}
+
+                          {/* Embed editor */}
+                          {["embed", "embed_text"].includes(normalizeWelcomeType(settings.welcome?.type)) ? (
+                            <div className="woc-card p-4 sm:col-span-2 space-y-3">
+                              <div className="font-semibold text-sm">Embed options</div>
+
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <label>
+                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Title</div>
+                                  <input
+                                    value={settings.welcome?.embed?.title || ""}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: ensureWelcomeDefaults({
+                                          ...s.welcome,
+                                          embed: { ...(s.welcome?.embed || {}), title: e.target.value },
+                                        }),
+                                      }));
+                                      setDirty(true);
+                                    }}
+                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
+                                  />
+                                </label>
+
+                                <label>
+                                  <div className="text-xs mb-1 text-[var(--text-muted)]">URL</div>
+                                  <input
+                                    value={settings.welcome?.embed?.url || ""}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: ensureWelcomeDefaults({
+                                          ...s.welcome,
+                                          embed: { ...(s.welcome?.embed || {}), url: e.target.value },
+                                        }),
+                                      }));
+                                      setDirty(true);
+                                    }}
+                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
+                                    placeholder="https://..."
+                                  />
+                                </label>
+
+                                <label className="flex items-center gap-3">
+                                  <div>
+                                    <div className="text-xs mb-1 text-[var(--text-muted)]">Color</div>
+                                    <input
+                                      type="color"
+                                      value={settings.welcome?.embed?.color || "#7c3aed"}
+                                      onChange={(e) => {
+                                        setSettings((s) => ({
+                                          ...s,
+                                          welcome: ensureWelcomeDefaults({
+                                            ...s.welcome,
+                                            embed: { ...(s.welcome?.embed || {}), color: e.target.value },
+                                          }),
+                                        }));
+                                        setDirty(true);
+                                      }}
+                                    />
+                                  </div>
+                                </label>
+
+                                <label className="sm:col-span-2">
+                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Description</div>
+                                  <textarea
+                                    value={settings.welcome?.embed?.description || ""}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: ensureWelcomeDefaults({
+                                          ...s.welcome,
+                                          embed: { ...(s.welcome?.embed || {}), description: e.target.value },
+                                        }),
+                                      }));
+                                      setDirty(true);
+                                    }}
+                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none min-h-[90px]"
+                                  />
+                                </label>
+
+                                <label>
+                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Author name</div>
+                                  <input
+                                    value={settings.welcome?.embed?.author?.name || ""}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: ensureWelcomeDefaults({
+                                          ...s.welcome,
+                                          embed: {
+                                            ...(s.welcome?.embed || {}),
+                                            author: { ...(s.welcome?.embed?.author || {}), name: e.target.value },
+                                          },
+                                        }),
+                                      }));
+                                      setDirty(true);
+                                    }}
+                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
+                                    placeholder="{server}"
+                                  />
+                                </label>
+
+                                <label>
+                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Author icon URL</div>
+                                  <input
+                                    value={settings.welcome?.embed?.author?.iconUrl || ""}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: ensureWelcomeDefaults({
+                                          ...s.welcome,
+                                          embed: {
+                                            ...(s.welcome?.embed || {}),
+                                            author: { ...(s.welcome?.embed?.author || {}), iconUrl: e.target.value },
+                                          },
+                                        }),
+                                      }));
+                                      setDirty(true);
+                                    }}
+                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
+                                    placeholder="{avatar}"
+                                  />
+                                </label>
+
+                                <label>
+                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Thumbnail URL</div>
+                                  <input
+                                    value={settings.welcome?.embed?.thumbnailUrl || ""}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: ensureWelcomeDefaults({
+                                          ...s.welcome,
+                                          embed: { ...(s.welcome?.embed || {}), thumbnailUrl: e.target.value },
+                                        }),
+                                      }));
+                                      setDirty(true);
+                                    }}
+                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
+                                    placeholder="{avatar}"
+                                  />
+                                </label>
+
+                                <label>
+                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Image URL</div>
+                                  <input
+                                    value={settings.welcome?.embed?.imageUrl || ""}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: ensureWelcomeDefaults({
+                                          ...s.welcome,
+                                          embed: { ...(s.welcome?.embed || {}), imageUrl: e.target.value },
+                                        }),
+                                      }));
+                                      setDirty(true);
+                                    }}
+                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
+                                    placeholder="https://..."
+                                  />
+                                </label>
+
+                                <label>
+                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Footer text</div>
+                                  <input
+                                    value={settings.welcome?.embed?.footer?.text || ""}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: ensureWelcomeDefaults({
+                                          ...s.welcome,
+                                          embed: {
+                                            ...(s.welcome?.embed || {}),
+                                            footer: { ...(s.welcome?.embed?.footer || {}), text: e.target.value },
+                                          },
+                                        }),
+                                      }));
+                                      setDirty(true);
+                                    }}
+                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
+                                    placeholder="Member #{membercount}"
+                                  />
+                                </label>
+
+                                <label>
+                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Footer icon URL</div>
+                                  <input
+                                    value={settings.welcome?.embed?.footer?.iconUrl || ""}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: ensureWelcomeDefaults({
+                                          ...s.welcome,
+                                          embed: {
+                                            ...(s.welcome?.embed || {}),
+                                            footer: { ...(s.welcome?.embed?.footer || {}), iconUrl: e.target.value },
+                                          },
+                                        }),
+                                      }));
+                                      setDirty(true);
+                                    }}
+                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
+                                    placeholder="https://..."
+                                  />
+                                </label>
+                              </div>
+
+                              <div className="text-[0.72rem] text-[var(--text-muted)]">
+                                Fields editor can be added next (Dyno style: name/value/inline). Your bot already supports it.
+                              </div>
+                            </div>
+                          ) : null}
+
                           {/* Card editor */}
                           {normalizeWelcomeType(settings.welcome?.type) === "card" ? (
                             <div className="woc-card p-5 sm:col-span-2">
@@ -1810,15 +2056,12 @@ export default function DashboardPage() {
                                         }),
                                       }));
                                       setDirty(true);
-                                      setCardPreviewError("");
-                                      setCardPreviewNonce(Date.now());
+                                      setWelcomePreviewBust(Date.now());
+                                      setWelcomePreviewError("");
                                     }}
                                     className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
                                     placeholder="https://..."
                                   />
-                                  <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
-                                    Tip: Some sites block hotlinking (Freepik often does). If it fails, the renderer will fall back to your background color.
-                                  </div>
                                 </label>
 
                                 <label>
@@ -1834,8 +2077,8 @@ export default function DashboardPage() {
                                         }),
                                       }));
                                       setDirty(true);
-                                      setCardPreviewError("");
-                                      setCardPreviewNonce(Date.now());
+                                      setWelcomePreviewBust(Date.now());
+                                      setWelcomePreviewError("");
                                     }}
                                     className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
                                   />
@@ -1854,8 +2097,8 @@ export default function DashboardPage() {
                                         }),
                                       }));
                                       setDirty(true);
-                                      setCardPreviewError("");
-                                      setCardPreviewNonce(Date.now());
+                                      setWelcomePreviewBust(Date.now());
+                                      setWelcomePreviewError("");
                                     }}
                                     className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
                                   />
@@ -1876,8 +2119,8 @@ export default function DashboardPage() {
                                           }),
                                         }));
                                         setDirty(true);
-                                        setCardPreviewError("");
-                                        setCardPreviewNonce(Date.now());
+                                        setWelcomePreviewBust(Date.now());
+                                        setWelcomePreviewError("");
                                       }}
                                     />
                                   </div>
@@ -1898,8 +2141,8 @@ export default function DashboardPage() {
                                           }),
                                         }));
                                         setDirty(true);
-                                        setCardPreviewError("");
-                                        setCardPreviewNonce(Date.now());
+                                        setWelcomePreviewBust(Date.now());
+                                        setWelcomePreviewError("");
                                       }}
                                     />
                                   </div>
@@ -1927,8 +2170,8 @@ export default function DashboardPage() {
                                         }),
                                       }));
                                       setDirty(true);
-                                      setCardPreviewError("");
-                                      setCardPreviewNonce(Date.now());
+                                      setWelcomePreviewBust(Date.now());
+                                      setWelcomePreviewError("");
                                     }}
                                     className="w-full"
                                   />
@@ -1954,19 +2197,19 @@ export default function DashboardPage() {
                                         }),
                                       }));
                                       setDirty(true);
-                                      setCardPreviewError("");
-                                      setCardPreviewNonce(Date.now());
+                                      setWelcomePreviewBust(Date.now());
+                                      setWelcomePreviewError("");
                                     }}
                                   />
                                 </label>
 
-                                {/* ✅ Live preview */}
-                                <div className="sm:col-span-2 woc-card p-4 mt-2">
-                                  <div className="flex items-center justify-between gap-3">
+                                {/* ✅ LIVE PREVIEW */}
+                                <div className="woc-card p-4 sm:col-span-2 mt-2">
+                                  <div className="flex items-start justify-between gap-3">
                                     <div>
                                       <div className="font-semibold text-sm">Live preview</div>
                                       <div className="text-xs text-[var(--text-muted)] mt-1">
-                                        Renders a real PNG via <code>/api/guilds/[guildId]/welcome-card.png</code>.
+                                        Renders a real PNG via <b>/api/guilds/[guildId]/welcome-card.png</b>.
                                       </div>
                                     </div>
 
@@ -1975,56 +2218,63 @@ export default function DashboardPage() {
                                         type="button"
                                         className="woc-btn-ghost text-xs"
                                         onClick={() => {
-                                          setCardPreviewError("");
-                                          setCardPreviewNonce(Date.now());
+                                          setWelcomePreviewError("");
+                                          setWelcomePreviewBust(Date.now());
                                         }}
                                       >
                                         Refresh
                                       </button>
 
-                                      {previewUrl ? (
-                                        <a
-                                          className="woc-btn-ghost text-xs"
-                                          href={previewUrl}
-                                          target="_blank"
-                                          rel="noreferrer"
-                                        >
-                                          Open
-                                        </a>
-                                      ) : null}
+                                      <a
+                                        className={cx(
+                                          "woc-btn-ghost text-xs",
+                                          !welcomeCardPreviewUrl ? "opacity-60 pointer-events-none" : ""
+                                        )}
+                                        href={welcomeCardPreviewUrl || "#"}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        onClick={() => setWelcomePreviewError("")}
+                                      >
+                                        Open
+                                      </a>
                                     </div>
                                   </div>
 
-                                  {cardPreviewError ? (
+                                  {welcomePreviewError ? (
                                     <div className="mt-3 text-xs text-rose-200/90 bg-rose-500/10 border border-rose-400/30 rounded-xl p-3">
                                       <div className="font-semibold">Preview error</div>
-                                      <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{cardPreviewError}</div>
+                                      <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">
+                                        {welcomePreviewError}
+                                      </div>
+                                      <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
+                                        Check DevTools Network for the PNG request: status + content-type.
+                                      </div>
                                     </div>
                                   ) : null}
 
-                                  <div className="mt-3 rounded-2xl overflow-hidden border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_80%,transparent)]">
-                                    {previewUrl ? (
-                                      // eslint-disable-next-line @next/next/no-img-element
-                                      <img
-                                        src={previewUrl}
-                                        alt="Welcome card preview"
-                                        className="w-full h-auto block"
-                                        onError={() => {
-                                          setCardPreviewError("Image failed to load. Check the PNG request in Network for status + content-type.");
-                                        }}
-                                      />
-                                    ) : (
-                                      <div className="p-4 text-sm text-[var(--text-muted)]">
-                                        Preview unavailable (pick a server + set type to Card).
-                                      </div>
-                                    )}
+                                  <div className="mt-3 rounded-2xl overflow-hidden border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                      key={welcomeCardPreviewUrl || "nope"}
+                                      src={welcomeCardPreviewUrl || ""}
+                                      alt="Welcome card preview"
+                                      className="w-full h-auto"
+                                      onError={() => {
+                                        // If server returns HTML/JSON or fails, this will trip.
+                                        setWelcomePreviewError(
+                                          "Image failed to load. Your route is returning non-image data or failing. Confirm it returns image/png."
+                                        );
+                                      }}
+                                      onLoad={() => setWelcomePreviewError("")}
+                                    />
                                   </div>
 
-                                  {previewUrl ? (
-                                    <div className="mt-3 text-[0.72rem] text-[var(--text-muted)] break-all">
-                                      Endpoint: <code>{previewUrl}</code>
-                                    </div>
-                                  ) : null}
+                                  <div className="mt-3 text-[0.72rem] text-[var(--text-muted)] break-all">
+                                    Endpoint:{" "}
+                                    <span className="font-semibold text-[var(--text-main)]">
+                                      {welcomeCardPreviewUrl || "(not ready)"}
+                                    </span>
+                                  </div>
                                 </div>
                               </div>
                             </div>
