@@ -1,11 +1,26 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-export function middleware(_req: NextRequest) {
+export function middleware(req: NextRequest) {
+  const { pathname } = req.nextUrl;
+
+  // ✅ Allow welcome card image generation without auth
+  if (
+    pathname.startsWith("/api/guilds/") &&
+    pathname.endsWith("/welcome-card.png")
+  ) {
+    return NextResponse.next();
+  }
+
   return NextResponse.next();
 }
 
-// ✅ Never run middleware on /api (or static files)
 export const config = {
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
+  matcher: [
+    /*
+     * Apply middleware to everything EXCEPT static files,
+     * but still allow us to short-circuit PNG routes above.
+     */
+    "/((?!_next/static|_next/image|favicon.ico).*)",
+  ],
 };
