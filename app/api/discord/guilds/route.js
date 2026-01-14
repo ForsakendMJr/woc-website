@@ -14,7 +14,7 @@ function roleFromGuild(g) {
   return "Manager";
 }
 
-function safeText(input, max = 220) {
+function safeText(input, max = 280) {
   const s = String(input || "").trim();
   if (!s) return "";
   const looksLikeHtml =
@@ -34,25 +34,60 @@ export async function GET(req) {
 
     if (!accessToken) {
       return NextResponse.json(
-        { guilds: [], source: "none", error: "Not authenticated." },
+        { guilds: [], source: "none", error: "Not authenticated (missing access token)." },
         { status: 401 }
       );
     }
 
     const res = await fetch(`${DISCORD_API}/users/@me/guilds`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
       cache: "no-store",
     });
 
+    const ct = (res.headers.get("content-type") || "").toLowerCase();
+    const bodyText = await res.text().catch(() => "");
+
+    // If Discord says no, forward that status (401/403/etc) so UI can react correctly.
     if (!res.ok) {
-      const txt = await res.text().catch(() => "");
+      // Try JSON first for nice errors
+      if (ct.includes("application/json")) {
+        const json = (() => {
+          try {
+            return JSON.parse(bodyText);
+          } catch {
+            return null;
+          }
+        })();
+
+        return NextResponse.json(
+          {
+            guilds: [],
+            source: "none",
+            error: json?.message || safeText(bodyText) || `Discord error (${res.status})`,
+            discord: json || null,
+          },
+          { status: res.status }
+        );
+      }
+
       return NextResponse.json(
-        { guilds: [], source: "none", error: safeText(txt) },
-        { status: 500 }
+        { guilds: [], source: "none", error: safeText(bodyText) || `Discord error (${res.status})` },
+        { status: res.status }
       );
     }
 
-    const raw = await res.json().catch(() => []);
+    // Success JSON
+    const raw = (() => {
+      try {
+        return JSON.parse(bodyText);
+      } catch {
+        return [];
+      }
+    })();
+
     const guilds = (Array.isArray(raw) ? raw : [])
       .filter((g) => g?.owner || ((Number(g?.permissions || 0) & PERM_ADMIN) === PERM_ADMIN))
       .map((g) => ({
@@ -67,7 +102,7 @@ export async function GET(req) {
     return NextResponse.json({ guilds, source: "live" }, { status: 200 });
   } catch (err) {
     return NextResponse.json(
-      { guilds: [], source: "none", error: safeText(err?.message) },
+      { guilds: [], source: "none", error: safeText(err?.message || err) },
       { status: 500 }
     );
   }
