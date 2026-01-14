@@ -11,8 +11,10 @@ const LS = { selectedGuild: "woc-selected-guild" };
 // Endpoints (App Router)
 const GUILDS_ENDPOINT = "/api/discord/guilds";
 const STATUS_ENDPOINT = (gid) => `/api/guilds/${encodeURIComponent(gid)}/status`;
-const SETTINGS_ENDPOINT = (gid) => `/api/guilds/${encodeURIComponent(gid)}/settings`;
-const CHANNELS_ENDPOINT = (gid) => `/api/guilds/${encodeURIComponent(gid)}/channels`;
+const SETTINGS_ENDPOINT = (gid) =>
+  `/api/guilds/${encodeURIComponent(gid)}/settings`;
+const CHANNELS_ENDPOINT = (gid) =>
+  `/api/guilds/${encodeURIComponent(gid)}/channels`;
 
 // Fallback endpoint (some builds use this style)
 const DISCORD_CHANNELS_FALLBACK = (gid) =>
@@ -517,11 +519,14 @@ function mergeModuleDefaults(existingModules, defaultModules) {
 
   for (const [catKey, defCat] of Object.entries(defaultModules || {})) {
     if (!out[catKey] || typeof out[catKey] !== "object") out[catKey] = {};
-    if (typeof out[catKey].enabled !== "boolean") out[catKey].enabled = defCat.enabled;
+    if (typeof out[catKey].enabled !== "boolean")
+      out[catKey].enabled = defCat.enabled;
 
-    if (!out[catKey].subs || typeof out[catKey].subs !== "object") out[catKey].subs = {};
+    if (!out[catKey].subs || typeof out[catKey].subs !== "object")
+      out[catKey].subs = {};
     for (const [subKey, defVal] of Object.entries(defCat.subs || {})) {
-      if (typeof out[catKey].subs[subKey] !== "boolean") out[catKey].subs[subKey] = defVal;
+      if (typeof out[catKey].subs[subKey] !== "boolean")
+        out[catKey].subs[subKey] = defVal;
     }
   }
 
@@ -564,7 +569,8 @@ function ensureWelcomeDefaults(welcome) {
   w.type = normalizeWelcomeType(w.type);
 
   if (typeof w.channelId !== "string") w.channelId = "";
-  if (typeof w.message !== "string") w.message = "Welcome {user} to **{server}**! ✨";
+  if (typeof w.message !== "string")
+    w.message = "Welcome {user} to **{server}**! ✨";
   if (typeof w.autoRoleId !== "string") w.autoRoleId = "";
   if (typeof w.dmEnabled !== "boolean") w.dmEnabled = false;
 
@@ -572,7 +578,8 @@ function ensureWelcomeDefaults(welcome) {
   w.embed ||= {};
   if (typeof w.embed.title !== "string") w.embed.title = "Welcome!";
   if (typeof w.embed.url !== "string") w.embed.url = "";
-  if (typeof w.embed.description !== "string") w.embed.description = "Welcome {user} to **{server}**!";
+  if (typeof w.embed.description !== "string")
+    w.embed.description = "Welcome {user} to **{server}**!";
   if (typeof w.embed.color !== "string") w.embed.color = "#7c3aed";
   if (typeof w.embed.thumbnailUrl !== "string") w.embed.thumbnailUrl = "{avatar}";
   if (typeof w.embed.imageUrl !== "string") w.embed.imageUrl = "";
@@ -581,15 +588,18 @@ function ensureWelcomeDefaults(welcome) {
   if (typeof w.embed.author.iconUrl !== "string") w.embed.author.iconUrl = "";
   if (typeof w.embed.author.url !== "string") w.embed.author.url = "";
   if (typeof w.embed.footer !== "object" || !w.embed.footer) w.embed.footer = {};
-  if (typeof w.embed.footer.text !== "string") w.embed.footer.text = "Member #{membercount}";
+  if (typeof w.embed.footer.text !== "string")
+    w.embed.footer.text = "Member #{membercount}";
   if (typeof w.embed.footer.iconUrl !== "string") w.embed.footer.iconUrl = "";
   if (!Array.isArray(w.embed.fields)) w.embed.fields = [];
 
   // Card config
   w.card ||= {};
   if (typeof w.card.enabled !== "boolean") w.card.enabled = false;
-  if (typeof w.card.title !== "string") w.card.title = "{user.name} just joined the server";
-  if (typeof w.card.subtitle !== "string") w.card.subtitle = "Member #{membercount}";
+  if (typeof w.card.title !== "string")
+    w.card.title = "{user.name} just joined the server";
+  if (typeof w.card.subtitle !== "string")
+    w.card.subtitle = "Member #{membercount}";
   if (typeof w.card.backgroundColor !== "string") w.card.backgroundColor = "#0b1020";
   if (typeof w.card.textColor !== "string") w.card.textColor = "#ffffff";
   if (typeof w.card.overlayOpacity !== "number") w.card.overlayOpacity = 0.35;
@@ -666,7 +676,8 @@ function buildWelcomeCardPreviewUrl({
 
   if (backgroundColor) params.set("backgroundColor", backgroundColor);
   if (textColor) params.set("textColor", textColor);
-  if (typeof overlayOpacity === "number") params.set("overlayOpacity", String(overlayOpacity));
+  if (typeof overlayOpacity === "number")
+    params.set("overlayOpacity", String(overlayOpacity));
   params.set("showAvatar", showAvatar ? "true" : "false");
 
   if (backgroundUrl) params.set("backgroundUrl", backgroundUrl);
@@ -814,7 +825,10 @@ export default function DashboardPage() {
     (async () => {
       try {
         setGuildWarn("");
-        const data = await fetchJson(GUILDS_ENDPOINT, { cache: "no-store", signal: ac.signal });
+        const data = await fetchJson(GUILDS_ENDPOINT, {
+          cache: "no-store",
+          signal: ac.signal,
+        });
 
         const list = Array.isArray(data.guilds) ? data.guilds : [];
         setGuilds(list);
@@ -822,7 +836,9 @@ export default function DashboardPage() {
         const warn = safeErrorMessage(data.warning || data.error || "");
         if (warn) setGuildWarn(warn);
 
-        const raw = String(selectedGuildIdRaw || safeGet(LS.selectedGuild, "") || "").trim();
+        const raw = String(
+          selectedGuildIdRaw || safeGet(LS.selectedGuild, "") || ""
+        ).trim();
         const first = String(list[0]?.id || "");
         const validRaw = isSnowflake(raw) && list.some((g) => String(g.id) === raw);
 
@@ -924,7 +940,10 @@ export default function DashboardPage() {
 
   async function fetchChannelsForGuild(gid, signal) {
     try {
-      const data = await fetchJson(CHANNELS_ENDPOINT(gid), { cache: "no-store", signal });
+      const data = await fetchJson(CHANNELS_ENDPOINT(gid), {
+        cache: "no-store",
+        signal,
+      });
       const list = Array.isArray(data.channels) ? data.channels : [];
       return { channels: list, warning: safeErrorMessage(data.warning || "") };
     } catch (e) {
@@ -950,7 +969,10 @@ export default function DashboardPage() {
         status === 404;
 
       if (shouldFallback) {
-        const data2 = await fetchJson(DISCORD_CHANNELS_FALLBACK(gid), { cache: "no-store", signal });
+        const data2 = await fetchJson(DISCORD_CHANNELS_FALLBACK(gid), {
+          cache: "no-store",
+          signal,
+        });
         const list2 = Array.isArray(data2.channels) ? data2.channels : [];
         return { channels: list2, warning: safeErrorMessage(data2.warning || "") };
       }
@@ -981,9 +1003,14 @@ export default function DashboardPage() {
 
     (async () => {
       try {
-        const { channels: list, warning } = await fetchChannelsForGuild(canonicalGuildId, ac.signal);
+        const { channels: list, warning } = await fetchChannelsForGuild(
+          canonicalGuildId,
+          ac.signal
+        );
         setChannels(list);
-        setChannelsWarn(warning && warning !== "Missing/invalid guildId." ? warning : "");
+        setChannelsWarn(
+          warning && warning !== "Missing/invalid guildId." ? warning : ""
+        );
       } catch (e) {
         if (e?.name === "AbortError") return;
         const msg = safeErrorMessage(e?.message || "Failed to load channels.");
@@ -1014,7 +1041,9 @@ export default function DashboardPage() {
       });
 
       const incoming =
-        data?.settings && typeof data.settings === "object" ? data.settings : safeSettings;
+        data?.settings && typeof data.settings === "object"
+          ? data.settings
+          : safeSettings;
       const mergedModules = mergeModuleDefaults(incoming.modules, defaults);
 
       setSettings({
@@ -1110,8 +1139,12 @@ export default function DashboardPage() {
     });
   }, [channels]);
 
-  const debugStatusUrl = isSnowflake(canonicalGuildId) ? `${STATUS_ENDPOINT(canonicalGuildId)}` : "";
-  const debugChannelsUrl = isSnowflake(canonicalGuildId) ? `${CHANNELS_ENDPOINT(canonicalGuildId)}` : "";
+  const debugStatusUrl = isSnowflake(canonicalGuildId)
+    ? `${STATUS_ENDPOINT(canonicalGuildId)}`
+    : "";
+  const debugChannelsUrl = isSnowflake(canonicalGuildId)
+    ? `${CHANNELS_ENDPOINT(canonicalGuildId)}`
+    : "";
 
   // ✅ Compute welcome card preview endpoint
   const welcomeCardPreviewUrl = useMemo(() => {
@@ -1124,12 +1157,14 @@ export default function DashboardPage() {
     const guildIcon = guildIconUrl(selectedGuild) || "";
 
     const userName =
-      String(session?.user?.name || session?.user?.email || "New Member").trim() || "New Member";
+      String(session?.user?.name || session?.user?.email || "New Member").trim() ||
+      "New Member";
     const userImage = String(session?.user?.image || "").trim();
 
     // Try to pull something sensible for membercount
     const membercount =
-      String(selectedGuild?.memberCount || selectedGuild?.member_count || "").trim() || "123";
+      String(selectedGuild?.memberCount || selectedGuild?.member_count || "").trim() ||
+      "123";
 
     const card = ensureWelcomeDefaults(settings.welcome).card;
 
@@ -1139,21 +1174,25 @@ export default function DashboardPage() {
       serverIconUrl: guildIcon,
       username: userName,
       tag: "",
-
       membercount,
       avatarUrl: userImage,
       title: card?.title || "{user.name} just joined the server",
       subtitle: card?.subtitle || "Member #{membercount}",
-
       backgroundColor: card?.backgroundColor || "#0b1020",
       textColor: card?.textColor || "#ffffff",
       overlayOpacity: Number(card?.overlayOpacity ?? 0.35),
       showAvatar: card?.showAvatar !== false,
       backgroundUrl: card?.backgroundUrl || "",
-
       bust: welcomePreviewBust,
     });
-  }, [gateInstalled, canonicalGuildId, settings, selectedGuild, session, welcomePreviewBust]);
+  }, [
+    gateInstalled,
+    canonicalGuildId,
+    settings,
+    selectedGuild,
+    session,
+    welcomePreviewBust,
+  ]);
 
   return (
     <div className="max-w-7xl mx-auto px-6 lg:px-10 py-12">
@@ -1162,10 +1201,12 @@ export default function DashboardPage() {
           <div>
             <h1 className="text-3xl sm:text-4xl font-bold">Dashboard</h1>
             <p className="mt-2 text-sm text-[var(--text-muted)] max-w-3xl">
-              WoC’s control room. Choose a server, then tune modules, logs, welcome, moderation, and personality.
+              WoC’s control room. Choose a server, then tune modules, logs, welcome,
+              moderation, and personality.
             </p>
             <p className="mt-2 text-[0.78rem] text-[var(--text-muted)]">
-              <span className="font-semibold text-[var(--text-main)]">WOC whisper:</span> {moodWhisper}
+              <span className="font-semibold text-[var(--text-main)]">WOC whisper:</span>{" "}
+              {moodWhisper}
             </p>
           </div>
 
@@ -1183,7 +1224,9 @@ export default function DashboardPage() {
         ) : null}
 
         {loading ? (
-          <div className="mt-8 text-sm text-[var(--text-muted)]">Loading your portal…</div>
+          <div className="mt-8 text-sm text-[var(--text-muted)]">
+            Loading your portal…
+          </div>
         ) : !authed ? (
           <div className="mt-8 grid gap-4 sm:grid-cols-2">
             <div className="woc-card p-5">
@@ -1246,7 +1289,11 @@ export default function DashboardPage() {
                       {install.installed === true ? <Pill tone="ok">Installed ✅</Pill> : null}
                       {install.installed === false ? <Pill tone="warn">Not installed 🔒</Pill> : null}
                       {!isSnowflake(canonicalGuildId) ? <Pill tone="warn">Pick a server</Pill> : null}
-                      <button type="button" className="woc-btn-ghost text-xs" onClick={resetSelectedGuild}>
+                      <button
+                        type="button"
+                        className="woc-btn-ghost text-xs"
+                        onClick={resetSelectedGuild}
+                      >
                         Reset selection
                       </button>
                     </div>
@@ -1256,7 +1303,9 @@ export default function DashboardPage() {
                 {guildWarn ? (
                   <div className="mt-4 text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
                     <div className="font-semibold">Guild list notice</div>
-                    <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{guildWarn}</div>
+                    <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">
+                      {guildWarn}
+                    </div>
                   </div>
                 ) : null}
 
@@ -1280,10 +1329,20 @@ export default function DashboardPage() {
 
                 {process.env.NODE_ENV !== "production" && isSnowflake(canonicalGuildId) ? (
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <a className="woc-btn-ghost text-xs" href={debugStatusUrl} target="_blank" rel="noreferrer">
+                    <a
+                      className="woc-btn-ghost text-xs"
+                      href={debugStatusUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
                       Open status JSON
                     </a>
-                    <a className="woc-btn-ghost text-xs" href={debugChannelsUrl} target="_blank" rel="noreferrer">
+                    <a
+                      className="woc-btn-ghost text-xs"
+                      href={debugChannelsUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
                       Open channels JSON
                     </a>
                   </div>
@@ -1292,14 +1351,18 @@ export default function DashboardPage() {
                 {install.warning ? (
                   <div className="mt-4 text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
                     <div className="font-semibold">Gate notice</div>
-                    <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{install.warning}</div>
+                    <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">
+                      {install.warning}
+                    </div>
                   </div>
                 ) : null}
 
                 {channelsWarn && isSnowflake(canonicalGuildId) && gateInstalled ? (
                   <div className="mt-4 text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
                     <div className="font-semibold">Channel list notice</div>
-                    <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{channelsWarn}</div>
+                    <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">
+                      {channelsWarn}
+                    </div>
                   </div>
                 ) : null}
 
@@ -1313,9 +1376,15 @@ export default function DashboardPage() {
                     <a
                       className={cx(
                         "mt-3 inline-flex items-center gap-2 woc-btn-primary",
-                        !hasClientId || !isSnowflake(canonicalGuildId) ? "opacity-60 cursor-not-allowed" : ""
+                        !hasClientId || !isSnowflake(canonicalGuildId)
+                          ? "opacity-60 cursor-not-allowed"
+                          : ""
                       )}
-                      href={hasClientId && isSnowflake(canonicalGuildId) ? buildBotInviteUrl(canonicalGuildId) : undefined}
+                      href={
+                        hasClientId && isSnowflake(canonicalGuildId)
+                          ? buildBotInviteUrl(canonicalGuildId)
+                          : undefined
+                      }
                       target="_blank"
                       rel="noreferrer"
                       onClick={(e) => {
@@ -1354,7 +1423,9 @@ export default function DashboardPage() {
                         ? "opacity-60 cursor-not-allowed"
                         : ""
                     )}
-                    disabled={!gateInstalled || !dirty || settingsLoading || !isSnowflake(canonicalGuildId)}
+                    disabled={
+                      !gateInstalled || !dirty || settingsLoading || !isSnowflake(canonicalGuildId)
+                    }
                     onClick={saveSettings}
                     title={
                       !isSnowflake(canonicalGuildId)
@@ -1448,7 +1519,9 @@ export default function DashboardPage() {
                             </div>
                             <div className="woc-card p-3">
                               <div className="text-xs text-[var(--text-muted)]">Mood</div>
-                              <div className="text-lg font-semibold mt-1">{settings.personality?.mood}</div>
+                              <div className="text-lg font-semibold mt-1">
+                                {settings.personality?.mood}
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -1531,7 +1604,9 @@ export default function DashboardPage() {
                             </div>
 
                             <label className="inline-flex items-center gap-2">
-                              <span className="text-[0.72rem] text-[var(--text-muted)]">Category</span>
+                              <span className="text-[0.72rem] text-[var(--text-muted)]">
+                                Category
+                              </span>
                               <input
                                 type="checkbox"
                                 checked={isModuleEnabled(settings.modules, activeCategory.key)}
@@ -1560,11 +1635,21 @@ export default function DashboardPage() {
 
                           <div className="mt-4 grid gap-4 sm:grid-cols-2">
                             {filteredSubs.map((s) => {
-                              const catEnabled = isModuleEnabled(settings.modules, activeCategory.key);
-                              const subEnabled = isSubEnabled(settings.modules, activeCategory.key, s.key);
+                              const catEnabled = isModuleEnabled(
+                                settings.modules,
+                                activeCategory.key
+                              );
+                              const subEnabled = isSubEnabled(
+                                settings.modules,
+                                activeCategory.key,
+                                s.key
+                              );
 
                               return (
-                                <div key={s.key} className="woc-card p-4 flex flex-col justify-between">
+                                <div
+                                  key={s.key}
+                                  className="woc-card p-4 flex flex-col justify-between"
+                                >
                                   <div className="flex items-start justify-between gap-3">
                                     <div className="min-w-0">
                                       <div className="font-semibold truncate">{s.label}</div>
@@ -1588,7 +1673,11 @@ export default function DashboardPage() {
                                         checked={!!subEnabled}
                                         disabled={!catEnabled}
                                         onChange={(e) => {
-                                          setSubEnabled(activeCategory.key, s.key, e.target.checked);
+                                          setSubEnabled(
+                                            activeCategory.key,
+                                            s.key,
+                                            e.target.checked
+                                          );
                                         }}
                                       />
                                     </label>
@@ -1615,13 +1704,18 @@ export default function DashboardPage() {
                         <div className="grid gap-3 sm:grid-cols-2">
                           <label className="woc-card p-4">
                             <div className="font-semibold text-sm">Enable logging</div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">Master switch for logs.</div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">
+                              Master switch for logs.
+                            </div>
                             <input
                               type="checkbox"
                               className="mt-3"
                               checked={!!settings.logs?.enabled}
                               onChange={(e) => {
-                                setSettings((s) => ({ ...s, logs: { ...s.logs, enabled: e.target.checked } }));
+                                setSettings((s) => ({
+                                  ...s,
+                                  logs: { ...s.logs, enabled: e.target.checked },
+                                }));
                                 setDirty(true);
                               }}
                             />
@@ -1629,7 +1723,9 @@ export default function DashboardPage() {
 
                           <label className="woc-card p-4">
                             <div className="font-semibold text-sm">Prefix</div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">Short, sharp, easy to type.</div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">
+                              Short, sharp, easy to type.
+                            </div>
                             <input
                               value={settings.prefix}
                               onChange={(e) => {
@@ -1671,7 +1767,10 @@ export default function DashboardPage() {
                                 value={settings.logs?.[k] || ""}
                                 disabled={!gateInstalled || channelsLoading}
                                 onChange={(val) => {
-                                  setSettings((s) => ({ ...s, logs: { ...s.logs, [k]: val } }));
+                                  setSettings((s) => ({
+                                    ...s,
+                                    logs: { ...s.logs, [k]: val },
+                                  }));
                                   setDirty(true);
                                 }}
                                 noneLabel="None"
@@ -1685,18 +1784,26 @@ export default function DashboardPage() {
                     {/* WELCOME */}
                     {subtab === "welcome" ? (
                       <div className="space-y-4">
-                        <SectionTitle title="Welcome" subtitle="Welcome channel + message template + autorole." />
+                        <SectionTitle
+                          title="Welcome"
+                          subtitle="Welcome channel + message template + autorole."
+                        />
 
                         <div className="grid gap-3 sm:grid-cols-2">
                           <label className="woc-card p-4">
                             <div className="font-semibold text-sm">Enable welcome</div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">Turns on welcome posts.</div>
+                            <div className="text-xs text-[var(--text-muted)] mt-1">
+                              Turns on welcome posts.
+                            </div>
                             <input
                               type="checkbox"
                               className="mt-3"
                               checked={!!settings.welcome?.enabled}
                               onChange={(e) => {
-                                setSettings((s) => ({ ...s, welcome: { ...s.welcome, enabled: e.target.checked } }));
+                                setSettings((s) => ({
+                                  ...s,
+                                  welcome: { ...s.welcome, enabled: e.target.checked },
+                                }));
                                 setDirty(true);
                               }}
                             />
@@ -1713,7 +1820,10 @@ export default function DashboardPage() {
                               value={settings.welcome?.channelId || ""}
                               disabled={!gateInstalled || channelsLoading}
                               onChange={(val) => {
-                                setSettings((s) => ({ ...s, welcome: { ...s.welcome, channelId: val } }));
+                                setSettings((s) => ({
+                                  ...s,
+                                  welcome: { ...s.welcome, channelId: val },
+                                }));
                                 setDirty(true);
                               }}
                               allowNone={false}
@@ -1765,8 +1875,9 @@ export default function DashboardPage() {
                             </div>
 
                             <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
-                              Tokens: {"{user}"} {"{mention}"} {"{username}"} {"{user.name}"} {"{tag}"} {"{server}"}{" "}
-                              {"{server.name}"} {"{membercount}"} {"{server.member_count}"} {"{id}"} {"{avatar}"}
+                              Tokens: {"{user}"} {"{mention}"} {"{username}"} {"{user.name}"} {"{tag}"}{" "}
+                              {"{server}"} {"{server.name}"} {"{membercount}"} {"{server.member_count}"}{" "}
+                              {"{id}"} {"{avatar}"}
                             </div>
                           </div>
 
@@ -1785,7 +1896,10 @@ export default function DashboardPage() {
                               onChange={(e) => {
                                 setSettings((s) => ({
                                   ...s,
-                                  welcome: ensureWelcomeDefaults({ ...s.welcome, dmEnabled: e.target.checked }),
+                                  welcome: ensureWelcomeDefaults({
+                                    ...s.welcome,
+                                    dmEnabled: e.target.checked,
+                                  }),
                                 }));
                                 setDirty(true);
                               }}
@@ -1793,18 +1907,24 @@ export default function DashboardPage() {
                           </label>
 
                           {/* Text message editor */}
-                          {["message", "embed_text"].includes(normalizeWelcomeType(settings.welcome?.type)) ? (
+                          {["message", "embed_text"].includes(
+                            normalizeWelcomeType(settings.welcome?.type)
+                          ) ? (
                             <label className="woc-card p-4 sm:col-span-2">
                               <div className="font-semibold text-sm">Welcome message</div>
                               <div className="text-xs text-[var(--text-muted)] mt-1">
-                                Tokens: <b>{"{user}"}</b>, <b>{"{server}"}</b>, <b>{"{membercount}"}</b>, <b>{"{tag}"}</b>
+                                Tokens: <b>{"{user}"}</b>, <b>{"{server}"}</b>, <b>{"{membercount}"}</b>,{" "}
+                                <b>{"{tag}"}</b>
                               </div>
                               <textarea
                                 value={settings.welcome?.message || ""}
                                 onChange={(e) => {
                                   setSettings((s) => ({
                                     ...s,
-                                    welcome: ensureWelcomeDefaults({ ...s.welcome, message: e.target.value }),
+                                    welcome: ensureWelcomeDefaults({
+                                      ...s.welcome,
+                                      message: e.target.value,
+                                    }),
                                   }));
                                   setDirty(true);
                                 }}
@@ -1821,7 +1941,9 @@ export default function DashboardPage() {
                           ) : null}
 
                           {/* Embed editor */}
-                          {["embed", "embed_text"].includes(normalizeWelcomeType(settings.welcome?.type)) ? (
+                          {["embed", "embed_text"].includes(
+                            normalizeWelcomeType(settings.welcome?.type)
+                          ) ? (
                             <div className="woc-card p-4 sm:col-span-2 space-y-3">
                               <div className="font-semibold text-sm">Embed options</div>
 
@@ -1835,7 +1957,10 @@ export default function DashboardPage() {
                                         ...s,
                                         welcome: ensureWelcomeDefaults({
                                           ...s.welcome,
-                                          embed: { ...(s.welcome?.embed || {}), title: e.target.value },
+                                          embed: {
+                                            ...(s.welcome?.embed || {}),
+                                            title: e.target.value,
+                                          },
                                         }),
                                       }));
                                       setDirty(true);
@@ -1853,7 +1978,10 @@ export default function DashboardPage() {
                                         ...s,
                                         welcome: ensureWelcomeDefaults({
                                           ...s.welcome,
-                                          embed: { ...(s.welcome?.embed || {}), url: e.target.value },
+                                          embed: {
+                                            ...(s.welcome?.embed || {}),
+                                            url: e.target.value,
+                                          },
                                         }),
                                       }));
                                       setDirty(true);
@@ -1874,7 +2002,10 @@ export default function DashboardPage() {
                                           ...s,
                                           welcome: ensureWelcomeDefaults({
                                             ...s.welcome,
-                                            embed: { ...(s.welcome?.embed || {}), color: e.target.value },
+                                            embed: {
+                                              ...(s.welcome?.embed || {}),
+                                              color: e.target.value,
+                                            },
                                           }),
                                         }));
                                         setDirty(true);
@@ -1892,7 +2023,10 @@ export default function DashboardPage() {
                                         ...s,
                                         welcome: ensureWelcomeDefaults({
                                           ...s.welcome,
-                                          embed: { ...(s.welcome?.embed || {}), description: e.target.value },
+                                          embed: {
+                                            ...(s.welcome?.embed || {}),
+                                            description: e.target.value,
+                                          },
                                         }),
                                       }));
                                       setDirty(true);
@@ -1912,7 +2046,10 @@ export default function DashboardPage() {
                                           ...s.welcome,
                                           embed: {
                                             ...(s.welcome?.embed || {}),
-                                            author: { ...(s.welcome?.embed?.author || {}), name: e.target.value },
+                                            author: {
+                                              ...(s.welcome?.embed?.author || {}),
+                                              name: e.target.value,
+                                            },
                                           },
                                         }),
                                       }));
@@ -1934,7 +2071,10 @@ export default function DashboardPage() {
                                           ...s.welcome,
                                           embed: {
                                             ...(s.welcome?.embed || {}),
-                                            author: { ...(s.welcome?.embed?.author || {}), iconUrl: e.target.value },
+                                            author: {
+                                              ...(s.welcome?.embed?.author || {}),
+                                              iconUrl: e.target.value,
+                                            },
                                           },
                                         }),
                                       }));
@@ -1954,7 +2094,10 @@ export default function DashboardPage() {
                                         ...s,
                                         welcome: ensureWelcomeDefaults({
                                           ...s.welcome,
-                                          embed: { ...(s.welcome?.embed || {}), thumbnailUrl: e.target.value },
+                                          embed: {
+                                            ...(s.welcome?.embed || {}),
+                                            thumbnailUrl: e.target.value,
+                                          },
                                         }),
                                       }));
                                       setDirty(true);
@@ -1973,7 +2116,10 @@ export default function DashboardPage() {
                                         ...s,
                                         welcome: ensureWelcomeDefaults({
                                           ...s.welcome,
-                                          embed: { ...(s.welcome?.embed || {}), imageUrl: e.target.value },
+                                          embed: {
+                                            ...(s.welcome?.embed || {}),
+                                            imageUrl: e.target.value,
+                                          },
                                         }),
                                       }));
                                       setDirty(true);
@@ -1994,7 +2140,10 @@ export default function DashboardPage() {
                                           ...s.welcome,
                                           embed: {
                                             ...(s.welcome?.embed || {}),
-                                            footer: { ...(s.welcome?.embed?.footer || {}), text: e.target.value },
+                                            footer: {
+                                              ...(s.welcome?.embed?.footer || {}),
+                                              text: e.target.value,
+                                            },
                                           },
                                         }),
                                       }));
@@ -2016,7 +2165,10 @@ export default function DashboardPage() {
                                           ...s.welcome,
                                           embed: {
                                             ...(s.welcome?.embed || {}),
-                                            footer: { ...(s.welcome?.embed?.footer || {}), iconUrl: e.target.value },
+                                            footer: {
+                                              ...(s.welcome?.embed?.footer || {}),
+                                              iconUrl: e.target.value,
+                                            },
                                           },
                                         }),
                                       }));
@@ -2044,7 +2196,9 @@ export default function DashboardPage() {
 
                               <div className="grid gap-3 sm:grid-cols-2 mt-4">
                                 <label className="sm:col-span-2">
-                                  <div className="text-xs mb-1 text-[var(--text-muted)]">Background image URL (optional)</div>
+                                  <div className="text-xs mb-1 text-[var(--text-muted)]">
+                                    Background image URL (optional)
+                                  </div>
                                   <input
                                     value={settings.welcome?.card?.backgroundUrl || ""}
                                     onChange={(e) => {
@@ -2052,7 +2206,10 @@ export default function DashboardPage() {
                                         ...s,
                                         welcome: ensureWelcomeDefaults({
                                           ...s.welcome,
-                                          card: { ...(s.welcome?.card || {}), backgroundUrl: e.target.value },
+                                          card: {
+                                            ...(s.welcome?.card || {}),
+                                            backgroundUrl: e.target.value,
+                                          },
                                         }),
                                       }));
                                       setDirty(true);
@@ -2073,7 +2230,10 @@ export default function DashboardPage() {
                                         ...s,
                                         welcome: ensureWelcomeDefaults({
                                           ...s.welcome,
-                                          card: { ...(s.welcome?.card || {}), title: e.target.value },
+                                          card: {
+                                            ...(s.welcome?.card || {}),
+                                            title: e.target.value,
+                                          },
                                         }),
                                       }));
                                       setDirty(true);
@@ -2093,7 +2253,10 @@ export default function DashboardPage() {
                                         ...s,
                                         welcome: ensureWelcomeDefaults({
                                           ...s.welcome,
-                                          card: { ...(s.welcome?.card || {}), subtitle: e.target.value },
+                                          card: {
+                                            ...(s.welcome?.card || {}),
+                                            subtitle: e.target.value,
+                                          },
                                         }),
                                       }));
                                       setDirty(true);
@@ -2115,7 +2278,10 @@ export default function DashboardPage() {
                                           ...s,
                                           welcome: ensureWelcomeDefaults({
                                             ...s.welcome,
-                                            card: { ...(s.welcome?.card || {}), backgroundColor: e.target.value },
+                                            card: {
+                                              ...(s.welcome?.card || {}),
+                                              backgroundColor: e.target.value,
+                                            },
                                           }),
                                         }));
                                         setDirty(true);
@@ -2137,7 +2303,10 @@ export default function DashboardPage() {
                                           ...s,
                                           welcome: ensureWelcomeDefaults({
                                             ...s.welcome,
-                                            card: { ...(s.welcome?.card || {}), textColor: e.target.value },
+                                            card: {
+                                              ...(s.welcome?.card || {}),
+                                              textColor: e.target.value,
+                                            },
                                           }),
                                         }));
                                         setDirty(true);
@@ -2166,7 +2335,10 @@ export default function DashboardPage() {
                                         ...s,
                                         welcome: ensureWelcomeDefaults({
                                           ...s.welcome,
-                                          card: { ...(s.welcome?.card || {}), overlayOpacity: Number(e.target.value) },
+                                          card: {
+                                            ...(s.welcome?.card || {}),
+                                            overlayOpacity: Number(e.target.value),
+                                          },
                                         }),
                                       }));
                                       setDirty(true);
@@ -2193,7 +2365,10 @@ export default function DashboardPage() {
                                         ...s,
                                         welcome: ensureWelcomeDefaults({
                                           ...s.welcome,
-                                          card: { ...(s.welcome?.card || {}), showAvatar: e.target.checked },
+                                          card: {
+                                            ...(s.welcome?.card || {}),
+                                            showAvatar: e.target.checked,
+                                          },
                                         }),
                                       }));
                                       setDirty(true);
@@ -2203,13 +2378,14 @@ export default function DashboardPage() {
                                   />
                                 </label>
 
-                                {/* ✅ LIVE PREVIEW */}
+                                {/* ✅ LIVE PREVIEW (FIXED + SAFE) */}
                                 <div className="woc-card p-4 sm:col-span-2 mt-2">
                                   <div className="flex items-start justify-between gap-3">
                                     <div>
                                       <div className="font-semibold text-sm">Live preview</div>
                                       <div className="text-xs text-[var(--text-muted)] mt-1">
-                                        Renders a real PNG via <b>/api/guilds/[guildId]/welcome-card.png</b>.
+                                        Renders a real PNG via{" "}
+                                        <b>/api/guilds/[guildId]/welcome-card.png</b>.
                                       </div>
                                     </div>
 
@@ -2228,7 +2404,9 @@ export default function DashboardPage() {
                                       <a
                                         className={cx(
                                           "woc-btn-ghost text-xs",
-                                          !welcomeCardPreviewUrl ? "opacity-60 pointer-events-none" : ""
+                                          !welcomeCardPreviewUrl
+                                            ? "opacity-60 pointer-events-none"
+                                            : ""
                                         )}
                                         href={welcomeCardPreviewUrl || "#"}
                                         target="_blank"
@@ -2252,58 +2430,103 @@ export default function DashboardPage() {
                                     </div>
                                   ) : null}
 
-                                  <div className="mt-3 rounded-2xl overflow-hidden border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]">
-                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img
-                                      key={welcomeCardPreviewUrl || "nope"}
-                                      src={welcomeCardPreviewUrl || ""}
-                                      alt="Welcome card preview"
-                                      className="w-full h-auto"
-                                      onError={() => {
-                                        // If server returns HTML/JSON or fails, this will trip.
-                                        setWelcomePreviewError(
-                                          "Image failed to load. Your route is returning non-image data or failing. Confirm it returns image/png."
-                                        );
-                                      }}
-                                      onLoad={() => setWelcomePreviewError("")}
-                                    />
-                                  </div>
+                                  {(() => {
+                                    // Ensure we ALWAYS have a bust, even if something caches aggressively.
+                                    const bust = `__ts=${welcomePreviewBust || Date.now()}`;
+                                    const previewSrc = welcomeCardPreviewUrl
+                                      ? `${welcomeCardPreviewUrl}${
+                                          welcomeCardPreviewUrl.includes("?") ? "&" : "?"
+                                        }${bust}`
+                                      : "";
 
-                                  <div className="mt-3 text-[0.72rem] text-[var(--text-muted)] break-all">
-                                    Endpoint:{" "}
-                                    <span className="font-semibold text-[var(--text-main)]">
-                                      {welcomeCardPreviewUrl || "(not ready)"}
-                                    </span>
-                                  </div>
+                                    return (
+                                      <>
+                                        <div className="mt-3 rounded-2xl overflow-hidden border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]">
+                                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                                          <img
+                                            key={previewSrc || "nope"}
+                                            src={previewSrc}
+                                            alt="Welcome card preview"
+                                            className="w-full h-auto"
+                                            onError={async () => {
+                                              if (!previewSrc) return;
+                                              try {
+                                                const res = await fetch(previewSrc, {
+                                                  cache: "no-store",
+                                                });
+                                                const ct = (
+                                                  res.headers.get("content-type") || ""
+                                                ).toLowerCase();
+
+                                                let snippet = "";
+                                                if (!ct.includes("image/")) {
+                                                  const txt = await res.text().catch(() => "");
+                                                  snippet = txt
+                                                    ? ` Snippet: ${txt.slice(0, 180)}${
+                                                        txt.length > 180 ? "…" : ""
+                                                      }`
+                                                    : "";
+                                                }
+
+                                                setWelcomePreviewError(
+                                                  `Preview failed. Status ${res.status}. content-type: ${
+                                                    ct || "(none)"
+                                                  }.${snippet}`
+                                                );
+                                              } catch (e) {
+                                                setWelcomePreviewError(
+                                                  `Preview failed to fetch. ${String(
+                                                    e?.message || e
+                                                  )}`
+                                                );
+                                              }
+                                            }}
+                                            onLoad={() => setWelcomePreviewError("")}
+                                          />
+                                        </div>
+
+                                        <div className="mt-3 text-[0.72rem] text-[var(--text-muted)] break-all">
+                                          Endpoint:{" "}
+                                          <span className="font-semibold text-[var(--text-main)]">
+                                            {previewSrc || "(not ready)"}
+                                          </span>
+                                        </div>
+                                      </>
+                                    );
+                                  })()}
                                 </div>
+
+                                {/* ✅ Auto role ID (was below your preview before) */}
+                                <label className="woc-card p-4 sm:col-span-2">
+                                  <div className="font-semibold text-sm">Auto role ID</div>
+                                  <div className="text-xs text-[var(--text-muted)] mt-1">
+                                    Optional: role to assign to new members.
+                                  </div>
+                                  <input
+                                    value={settings.welcome?.autoRoleId || ""}
+                                    onChange={(e) => {
+                                      setSettings((s) => ({
+                                        ...s,
+                                        welcome: ensureWelcomeDefaults({
+                                          ...s.welcome,
+                                          autoRoleId: e.target.value,
+                                        }),
+                                      }));
+                                      setDirty(true);
+                                    }}
+                                    className="
+                                      mt-3 w-full px-3 py-2 rounded-2xl
+                                      border border-[var(--border-subtle)]/70
+                                      bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                                      text-[var(--text-main)]
+                                      outline-none
+                                    "
+                                    placeholder="e.g. 123456789012345678"
+                                  />
+                                </label>
                               </div>
                             </div>
                           ) : null}
-
-                          <label className="woc-card p-4 sm:col-span-2">
-                            <div className="font-semibold text-sm">Auto role ID</div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">
-                              Optional: role to assign to new members.
-                            </div>
-                            <input
-                              value={settings.welcome?.autoRoleId || ""}
-                              onChange={(e) => {
-                                setSettings((s) => ({
-                                  ...s,
-                                  welcome: ensureWelcomeDefaults({ ...s.welcome, autoRoleId: e.target.value }),
-                                }));
-                                setDirty(true);
-                              }}
-                              className="
-                                mt-3 w-full px-3 py-2 rounded-2xl
-                                border border-[var(--border-subtle)]/70
-                                bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
-                                text-[var(--text-main)]
-                                outline-none
-                              "
-                              placeholder="e.g. 123456789012345678"
-                            />
-                          </label>
                         </div>
                       </div>
                     ) : null}
@@ -2325,7 +2548,9 @@ export default function DashboardPage() {
                             >
                               <div>
                                 <div className="font-semibold text-sm">{label}</div>
-                                <div className="text-xs text-[var(--text-muted)] mt-1">{hint}</div>
+                                <div className="text-xs text-[var(--text-muted)] mt-1">
+                                  {hint}
+                                </div>
                               </div>
 
                               <input
@@ -2363,7 +2588,10 @@ export default function DashboardPage() {
                               value={settings.personality?.mood || "story"}
                               onChange={(e) => {
                                 const m = e.target.value;
-                                setSettings((s) => ({ ...s, personality: { ...s.personality, mood: m } }));
+                                setSettings((s) => ({
+                                  ...s,
+                                  personality: { ...s.personality, mood: m },
+                                }));
                                 setDirty(true);
                                 woc?.setMood?.(m);
                                 showToast(`Mood shifted: ${m}`, m);
@@ -2376,11 +2604,13 @@ export default function DashboardPage() {
                                 outline-none
                               "
                             >
-                              {["neutral", "battle", "playful", "story", "omen", "flustered"].map((m) => (
-                                <option key={m} value={m}>
-                                  {m}
-                                </option>
-                              ))}
+                              {["neutral", "battle", "playful", "story", "omen", "flustered"].map(
+                                (m) => (
+                                  <option key={m} value={m}>
+                                    {m}
+                                  </option>
+                                )
+                              )}
                             </select>
                           </label>
 
@@ -2398,7 +2628,10 @@ export default function DashboardPage() {
                               onChange={(e) => {
                                 setSettings((s) => ({
                                   ...s,
-                                  personality: { ...s.personality, sass: Number(e.target.value) },
+                                  personality: {
+                                    ...s.personality,
+                                    sass: Number(e.target.value),
+                                  },
                                 }));
                                 setDirty(true);
                                 woc?.setMood?.("playful");
@@ -2429,7 +2662,10 @@ export default function DashboardPage() {
                               onChange={(e) => {
                                 setSettings((s) => ({
                                   ...s,
-                                  personality: { ...s.personality, narration: e.target.checked },
+                                  personality: {
+                                    ...s.personality,
+                                    narration: e.target.checked,
+                                  },
                                 }));
                                 setDirty(true);
                                 woc?.setMood?.(e.target.checked ? "story" : "neutral");
@@ -2443,7 +2679,10 @@ export default function DashboardPage() {
                     {/* ACTION LOG */}
                     {subtab === "actionlog" ? (
                       <div className="space-y-3">
-                        <SectionTitle title="Action log" subtitle="Soon: admin actions, toggles changed, mod events." />
+                        <SectionTitle
+                          title="Action log"
+                          subtitle="Soon: admin actions, toggles changed, mod events."
+                        />
                         <div className="woc-card p-4 text-sm text-[var(--text-muted)]">
                           No entries yet. The chronicle is empty.
                         </div>
