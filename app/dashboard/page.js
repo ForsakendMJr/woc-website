@@ -2448,39 +2448,46 @@ export default function DashboardPage() {
                                             src={previewSrc}
                                             alt="Welcome card preview"
                                             className="w-full h-auto"
-                                            onError={async () => {
-                                              if (!previewSrc) return;
-                                              try {
-                                                const res = await fetch(previewSrc, {
-                                                  cache: "no-store",
-                                                });
-                                                const ct = (
-                                                  res.headers.get("content-type") || ""
-                                                ).toLowerCase();
+                                    onError={async () => {
+                                      if (!previewSrc) return;
 
-                                                let snippet = "";
-                                                if (!ct.includes("image/")) {
-                                                  const txt = await res.text().catch(() => "");
-                                                  snippet = txt
-                                                    ? ` Snippet: ${txt.slice(0, 180)}${
-                                                        txt.length > 180 ? "…" : ""
-                                                      }`
-                                                    : "";
-                                                }
+                                      try {
+                                        const res = await fetch(previewSrc, { cache: "no-store" });
+                                        const ct = (res.headers.get("content-type") || "").toLowerCase();
 
-                                                setWelcomePreviewError(
-                                                  `Preview failed. Status ${res.status}. content-type: ${
-                                                    ct || "(none)"
-                                                  }.${snippet}`
-                                                );
-                                              } catch (e) {
-                                                setWelcomePreviewError(
-                                                  `Preview failed to fetch. ${String(
-                                                    e?.message || e
-                                                  )}`
-                                                );
-                                              }
-                                            }}
+                                        if (!res.ok) {
+                                          const txt = await res.text().catch(() => "");
+                                          setWelcomePreviewError(
+                                            `Preview failed. Status ${res.status}. content-type: ${ct || "(none)"} ` +
+                                              (txt
+                                                ? `Snippet: ${txt.slice(0, 180)}${txt.length > 180 ? "…" : ""}`
+                                                : "")
+                                          );
+                                          return;
+                                        }
+
+                                        if (!ct.includes("image/")) {
+                                          const txt = await res.text().catch(() => "");
+                                          setWelcomePreviewError(
+                                            `Preview returned non-image. content-type: ${ct || "(none)"} ` +
+                                              (txt
+                                                ? `Snippet: ${txt.slice(0, 180)}${txt.length > 180 ? "…" : ""}`
+                                                : "")
+                                          );
+                                          return;
+                                        }
+
+                                        // If it's an image but still failed to render
+                                        setWelcomePreviewError(
+                                          `PNG returned (${ct}), but the browser couldn't decode it. ` +
+                                            `This usually means a runtime/rendering issue in the API route.`
+                                        );
+                                      } catch (e) {
+                                        setWelcomePreviewError(
+                                          `Preview fetch threw: ${String(e?.message || e)}`
+                                        );
+                                      }
+                                    }}
                                             onLoad={() => setWelcomePreviewError("")}
                                           />
                                         </div>
