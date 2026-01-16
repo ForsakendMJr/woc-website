@@ -2378,130 +2378,141 @@ export default function DashboardPage() {
                                   />
                                 </label>
 
-                                {/* ✅ LIVE PREVIEW (FIXED + SAFE) */}
-                                <div className="woc-card p-4 sm:col-span-2 mt-2">
-                                  <div className="flex items-start justify-between gap-3">
-                                    <div>
-                                      <div className="font-semibold text-sm">Live preview</div>
-                                      <div className="text-xs text-[var(--text-muted)] mt-1">
-                                        Renders a real PNG via{" "}
-                                        <b>/api/guilds/[guildId]/welcome-card.png</b>.
-                                      </div>
-                                    </div>
+{/* ✅ LIVE PREVIEW */}
+<div className="woc-card p-4 sm:col-span-2 mt-2">
+  <div className="flex items-start justify-between gap-3">
+    <div>
+      <div className="font-semibold text-sm">Live preview</div>
+      <div className="text-xs text-[var(--text-muted)] mt-1">
+        Renders a real PNG via <b>/api/guilds/[guildId]/welcome-card.png</b>.
+      </div>
+    </div>
 
-                                    <div className="flex items-center gap-2">
-                                      <button
-                                        type="button"
-                                        className="woc-btn-ghost text-xs"
-                                        onClick={() => {
-                                          setWelcomePreviewError("");
-                                          setWelcomePreviewBust(Date.now());
-                                        }}
-                                      >
-                                        Refresh
-                                      </button>
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        className="woc-btn-ghost text-xs"
+        onClick={() => {
+          setWelcomePreviewError("");
+          setWelcomePreviewBust(Date.now());
+        }}
+      >
+        Refresh
+      </button>
 
-                                      <a
-                                        className={cx(
-                                          "woc-btn-ghost text-xs",
-                                          !welcomeCardPreviewUrl
-                                            ? "opacity-60 pointer-events-none"
-                                            : ""
-                                        )}
-                                        href={welcomeCardPreviewUrl || "#"}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        onClick={() => setWelcomePreviewError("")}
-                                      >
-                                        Open
-                                      </a>
-                                    </div>
-                                  </div>
+      <a
+        className={cx(
+          "woc-btn-ghost text-xs",
+          !welcomeCardPreviewUrl ? "opacity-60 pointer-events-none" : ""
+        )}
+        href={welcomeCardPreviewUrl || "#"}
+        target="_blank"
+        rel="noreferrer"
+        onClick={() => setWelcomePreviewError("")}
+      >
+        Open
+      </a>
+    </div>
+  </div>
 
-                                  {welcomePreviewError ? (
-                                    <div className="mt-3 text-xs text-rose-200/90 bg-rose-500/10 border border-rose-400/30 rounded-xl p-3">
-                                      <div className="font-semibold">Preview error</div>
-                                      <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">
-                                        {welcomePreviewError}
-                                      </div>
-                                      <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
-                                        Check DevTools Network for the PNG request: status + content-type.
-                                      </div>
-                                    </div>
-                                  ) : null}
+  {/* Helper: verify the route really returns an image */}
+  {(() => {
+    const previewSrc = welcomeCardPreviewUrl || "";
 
-                                  {(() => {
-                                    // Ensure we ALWAYS have a bust, even if something caches aggressively.
-                                    const bust = `__ts=${welcomePreviewBust || Date.now()}`;
-                                    const previewSrc = welcomeCardPreviewUrl
-                                      ? `${welcomeCardPreviewUrl}${
-                                          welcomeCardPreviewUrl.includes("?") ? "&" : "?"
-                                        }${bust}`
-                                      : "";
+    async function verifyPng(url) {
+      if (!url) return { ok: false, reason: "No preview URL." };
 
-                                    return (
-                                      <>
-                                        <div className="mt-3 rounded-2xl overflow-hidden border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]">
-                                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                                          <img
-                                            key={previewSrc || "nope"}
-                                            src={previewSrc}
-                                            alt="Welcome card preview"
-                                            className="w-full h-auto"
-                                    onError={async () => {
-                                      if (!previewSrc) return;
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        const ct = (res.headers.get("content-type") || "").toLowerCase();
 
-                                      try {
-                                        const res = await fetch(previewSrc, { cache: "no-store" });
-                                        const ct = (res.headers.get("content-type") || "").toLowerCase();
+        // If it isn't an image, capture a short snippet for debugging.
+        if (!ct.includes("image/")) {
+          const txt = await res.text().catch(() => "");
+          const snippet = txt ? ` Snippet: ${txt.slice(0, 180)}${txt.length > 180 ? "…" : ""}` : "";
+          return {
+            ok: false,
+            reason: `Preview route returned non-image. Status ${res.status}. content-type: ${ct || "(none)"}.${
+              snippet
+            }`,
+          };
+        }
 
-                                        if (!res.ok) {
-                                          const txt = await res.text().catch(() => "");
-                                          setWelcomePreviewError(
-                                            `Preview failed. Status ${res.status}. content-type: ${ct || "(none)"} ` +
-                                              (txt
-                                                ? `Snippet: ${txt.slice(0, 180)}${txt.length > 180 ? "…" : ""}`
-                                                : "")
-                                          );
-                                          return;
-                                        }
+        // If it is an image but not OK, still error
+        if (!res.ok) {
+          return {
+            ok: false,
+            reason: `Preview route returned image but status ${res.status}. content-type: ${ct}.`,
+          };
+        }
 
-                                        if (!ct.includes("image/")) {
-                                          const txt = await res.text().catch(() => "");
-                                          setWelcomePreviewError(
-                                            `Preview returned non-image. content-type: ${ct || "(none)"} ` +
-                                              (txt
-                                                ? `Snippet: ${txt.slice(0, 180)}${txt.length > 180 ? "…" : ""}`
-                                                : "")
-                                          );
-                                          return;
-                                        }
+        // Optional: read bytes to ensure something exists (prevents “empty body” edge cases)
+        const buf = await res.arrayBuffer().catch(() => null);
+        if (!buf || buf.byteLength < 20) {
+          return {
+            ok: false,
+            reason: `Preview route returned image/png but response body looks empty (${buf?.byteLength ?? 0} bytes).`,
+          };
+        }
 
-                                        // If it's an image but still failed to render
-                                        setWelcomePreviewError(
-                                          `PNG returned (${ct}), but the browser couldn't decode it. ` +
-                                            `This usually means a runtime/rendering issue in the API route.`
-                                        );
-                                      } catch (e) {
-                                        setWelcomePreviewError(
-                                          `Preview fetch threw: ${String(e?.message || e)}`
-                                        );
-                                      }
-                                    }}
-                                            onLoad={() => setWelcomePreviewError("")}
-                                          />
-                                        </div>
+        // Great: the route is returning an image.
+        return { ok: true, reason: `OK (status ${res.status}, ${ct}, ${buf.byteLength} bytes)` };
+      } catch (e) {
+        return { ok: false, reason: `Fetch failed: ${String(e?.message || e)}` };
+      }
+    }
 
-                                        <div className="mt-3 text-[0.72rem] text-[var(--text-muted)] break-all">
-                                          Endpoint:{" "}
-                                          <span className="font-semibold text-[var(--text-main)]">
-                                            {previewSrc || "(not ready)"}
-                                          </span>
-                                        </div>
-                                      </>
-                                    );
-                                  })()}
-                                </div>
+    return (
+      <>
+        {welcomePreviewError ? (
+          <div className="mt-3 text-xs text-rose-200/90 bg-rose-500/10 border border-rose-400/30 rounded-xl p-3">
+            <div className="font-semibold">Preview notice</div>
+            <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">
+              {welcomePreviewError}
+            </div>
+            <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
+              Tip: Open the Endpoint in a new tab. If it renders there, your route is fine.
+            </div>
+          </div>
+        ) : null}
+
+        <div className="mt-3 rounded-2xl overflow-hidden border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            key={previewSrc || "nope"}
+            src={previewSrc}
+            alt="Welcome card preview"
+            className="w-full h-auto"
+            onLoad={() => setWelcomePreviewError("")}
+            onError={async () => {
+              // ✅ Don’t instantly scream “broken”. Verify first.
+              const check = await verifyPng(previewSrc);
+
+              if (check.ok) {
+                // Browser couldn't decode, but the route returned a real image.
+                // Treat as a soft warning instead of a red “route is broken”.
+                setWelcomePreviewError(
+                  `PNG returned, but the browser couldn’t decode it this time. ${check.reason}. Try Refresh.`
+                );
+              } else {
+                // Real failure (non-image, 401/500, HTML, etc.)
+                setWelcomePreviewError(check.reason);
+              }
+            }}
+          />
+        </div>
+
+        <div className="mt-3 text-[0.72rem] text-[var(--text-muted)] break-all">
+          Endpoint:{" "}
+          <span className="font-semibold text-[var(--text-main)]">
+            {previewSrc || "(not ready)"}
+          </span>
+        </div>
+      </>
+    );
+  })()}
+</div>
+
 
                                 {/* ✅ Auto role ID (was below your preview before) */}
                                 <label className="woc-card p-4 sm:col-span-2">
