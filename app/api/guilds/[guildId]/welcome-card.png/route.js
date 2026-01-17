@@ -3,7 +3,6 @@ import { ImageResponse } from "next/og";
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
 
-// ---------- helpers ----------
 function isSnowflake(id) {
   const s = String(id || "").trim();
   return /^[0-9]{17,20}$/.test(s);
@@ -51,65 +50,18 @@ function hexToRgb(hex) {
   const r = parseInt(h.slice(0, 2), 16);
   const g = parseInt(h.slice(2, 4), 16);
   const b = parseInt(h.slice(4, 6), 16);
-  return { r, g, b };
+  return {
+    r: Number.isFinite(r) ? r : 0,
+    g: Number.isFinite(g) ? g : 0,
+    b: Number.isFinite(b) ? b : 0,
+  };
 }
 
-function safeText(input, max = 240) {
-  const s = String(input || "").trim();
-  if (!s) return "";
-  return s.length > max ? s.slice(0, max) + "…" : s;
-}
-
-function safeUrl(u) {
-  const s = String(u || "").trim();
-  if (!s) return "";
-  if (s.length > 1400) return ""; // guard: query strings can get gnarly
-  try {
-    const url = new URL(s);
-    if (url.protocol !== "https:" && url.protocol !== "http:") return "";
-    return url.toString();
-  } catch {
-    return "";
-  }
-}
-
-async function fetchImageAsArrayBuffer(url) {
-  const u = safeUrl(url);
-  if (!u) return null;
-
-  // Tiny timeout to avoid hanging renders
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), 2500);
-
-  try {
-    const res = await fetch(u, {
-      cache: "no-store",
-      signal: ac.signal,
-      headers: { Accept: "image/*" },
-    });
-
-    if (!res.ok) return null;
-
-    const ct = (res.headers.get("content-type") || "").toLowerCase();
-    if (!ct.includes("image/")) return null;
-
-    const buf = await res.arrayBuffer();
-    if (!buf || buf.byteLength < 32) return null;
-
-    return buf;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(t);
-  }
-}
-
-// ---------- route ----------
 export async function GET(req, ctx) {
   const url = new URL(req.url);
   const guildId = getGuildId(req, ctx);
 
-  // 🔎 Debug mode (kept)
+  // Debug mode (returns JSON)
   if (url.searchParams.get("debug") === "1") {
     return new Response(
       JSON.stringify(
@@ -148,38 +100,31 @@ export async function GET(req, ctx) {
   }
 
   // Inputs
-  const serverName = safeText(url.searchParams.get("serverName") || "Server", 80);
-  const username = safeText(url.searchParams.get("username") || "New Member", 60);
-  const tag = safeText(url.searchParams.get("tag") || "", 40);
-  const membercount = safeText(url.searchParams.get("membercount") || "", 12);
+  const serverName = url.searchParams.get("serverName") || "Server";
+  const username = url.searchParams.get("username") || "New Member";
+  const tag = url.searchParams.get("tag") || "";
+  const membercount = url.searchParams.get("membercount") || "";
 
-  const title = safeText(
-    url.searchParams.get("title") || `${username} just joined the server`,
-    80
-  );
-  const subtitle = safeText(
-    url.searchParams.get("subtitle") || (membercount ? `Member #${membercount}` : ""),
-    60
-  );
+  const title =
+    url.searchParams.get("title") || `${username} just joined the server`;
+  const subtitle =
+    url.searchParams.get("subtitle") ||
+    (membercount ? `Member #${membercount}` : "");
 
   const backgroundUrl = url.searchParams.get("backgroundUrl") || "";
   const serverIconUrl = url.searchParams.get("serverIconUrl") || "";
   const avatarUrl = url.searchParams.get("avatarUrl") || "";
   const showAvatar = url.searchParams.get("showAvatar") === "true";
 
-  // Defaults (never white unless asked)
-  const backgroundColor = safeHex(url.searchParams.get("backgroundColor"), "#0b1020");
+  // Defaults (never white unless you ask for it)
+  const backgroundColor = safeHex(
+    url.searchParams.get("backgroundColor"),
+    "#0b1020"
+  );
   const textColor = safeHex(url.searchParams.get("textColor"), "#ffffff");
   const overlayOpacity = clamp01(url.searchParams.get("overlayOpacity"), 0.35);
 
   const { r, g, b } = hexToRgb(backgroundColor);
-
-  // ✅ Pre-fetch images to avoid flakey <img src="https://..."> inside the renderer
-  const [bgBuf, iconBuf, avatarBuf] = await Promise.all([
-    fetchImageAsArrayBuffer(backgroundUrl),
-    fetchImageAsArrayBuffer(serverIconUrl),
-    fetchImageAsArrayBuffer(avatarUrl),
-  ]);
 
   try {
     return new ImageResponse(
@@ -188,21 +133,29 @@ export async function GET(req, ctx) {
           style={{
             width: 1200,
             height: 400,
+            position: "relative",
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            padding: 44,
-            position: "relative",
-            backgroundColor,
+            padding: 48,
+            overflow: "hidden",
             color: textColor,
             fontFamily: "system-ui, Segoe UI, Inter, Arial",
-            overflow: "hidden",
           }}
         >
-          {/* Background image (bytes) */}
-          {bgBuf ? (
+          {/* ✅ HARD BACKGROUND LAYER (prevents white canvas) */}
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              backgroundColor: backgroundColor,
+            }}
+          />
+
+          {/* Background image (optional) */}
+          {backgroundUrl ? (
             <img
-              src={bgBuf}
+              src={backgroundUrl}
               alt=""
               style={{
                 position: "absolute",
@@ -214,7 +167,7 @@ export async function GET(req, ctx) {
             />
           ) : null}
 
-          {/* Dark overlay for readability */}
+          {/* Overlay (keeps text readable) */}
           <div
             style={{
               position: "absolute",
@@ -223,175 +176,104 @@ export async function GET(req, ctx) {
             }}
           />
 
-          {/* Accent glow blobs (unique styling, still OG-safe) */}
-          <div
-            style={{
-              position: "absolute",
-              left: -120,
-              top: -140,
-              width: 520,
-              height: 520,
-              borderRadius: 520,
-              background: "rgba(124,58,237,0.22)",
-            }}
-          />
-          <div
-            style={{
-              position: "absolute",
-              right: -140,
-              bottom: -180,
-              width: 560,
-              height: 560,
-              borderRadius: 560,
-              background: "rgba(16,185,129,0.16)",
-            }}
-          />
-
-          {/* Glass-ish panel (no backdropFilter, OG-safe) */}
-          <div
-            style={{
-              position: "absolute",
-              inset: 22,
-              borderRadius: 34,
-              border: "1px solid rgba(255,255,255,0.14)",
-              background: "rgba(255,255,255,0.06)",
-            }}
-          />
-
-          {/* Left: server block */}
+          {/* Left: server */}
           <div
             style={{
               position: "relative",
               display: "flex",
-              gap: 16,
+              gap: 18,
               alignItems: "center",
-              minWidth: 340,
+              minWidth: 320,
             }}
           >
-            {iconBuf ? (
+            {serverIconUrl ? (
               <img
-                src={iconBuf}
+                src={serverIconUrl}
                 alt=""
-                width={86}
-                height={86}
+                width={84}
+                height={84}
                 style={{
                   borderRadius: 26,
-                  border: "2px solid rgba(255,255,255,0.20)",
-                  background: "rgba(255,255,255,0.10)",
+                  border: "2px solid rgba(255,255,255,0.18)",
+                  backgroundColor: "rgba(255,255,255,0.08)",
                 }}
               />
             ) : (
               <div
                 style={{
-                  width: 86,
-                  height: 86,
+                  width: 84,
+                  height: 84,
                   borderRadius: 26,
                   backgroundColor: "rgba(255,255,255,0.12)",
-                  border: "2px solid rgba(255,255,255,0.12)",
                 }}
               />
             )}
 
             <div style={{ display: "flex", flexDirection: "column" }}>
-              <div style={{ fontSize: 14, opacity: 0.78, letterSpacing: 1.2 }}>
-                WELCOME
-              </div>
-              <div style={{ fontSize: 24, fontWeight: 700, opacity: 0.96 }}>
-                {serverName}
-              </div>
-              <div style={{ fontSize: 13, opacity: 0.72 }}>
+              <div style={{ fontSize: 22, opacity: 0.92 }}>{serverName}</div>
+              <div style={{ fontSize: 14, opacity: 0.75 }}>
                 {tag ? `${tag} • ` : ""}guildId: {guildId}
               </div>
             </div>
           </div>
 
           {/* Middle: text */}
-          <div style={{ position: "relative", flex: 1, padding: "0 34px" }}>
+          <div style={{ position: "relative", flex: 1, padding: "0 32px" }}>
             <div
               style={{
-                fontSize: 46,
-                fontWeight: 900,
-                lineHeight: 1.06,
-                letterSpacing: -0.6,
+                fontSize: 44,
+                fontWeight: 800,
+                lineHeight: 1.1,
+                letterSpacing: -0.5,
               }}
             >
               {title}
             </div>
-
             {subtitle ? (
-              <div style={{ fontSize: 22, marginTop: 12, opacity: 0.9 }}>
+              <div style={{ fontSize: 22, marginTop: 10, opacity: 0.9 }}>
                 {subtitle}
               </div>
             ) : null}
-
-            <div
-              style={{
-                marginTop: 16,
-                display: "inline-flex",
-                gap: 10,
-                alignItems: "center",
-                padding: "8px 12px",
-                borderRadius: 999,
-                border: "1px solid rgba(255,255,255,0.14)",
-                background: "rgba(0,0,0,0.18)",
-                fontSize: 13,
-                opacity: 0.92,
-              }}
-            >
-              <span style={{ opacity: 0.9 }}>User:</span>
-              <span style={{ fontWeight: 700 }}>{username}</span>
-              {membercount ? (
-                <span style={{ opacity: 0.85 }}>• Member #{membercount}</span>
-              ) : null}
-            </div>
           </div>
 
           {/* Right: avatar */}
           <div
             style={{
               position: "relative",
-              width: 170,
+              width: 160,
               display: "flex",
               justifyContent: "flex-end",
             }}
           >
-            {showAvatar && avatarBuf ? (
-              <div
+            {showAvatar && avatarUrl ? (
+              <img
+                src={avatarUrl}
+                alt=""
+                width={120}
+                height={120}
                 style={{
-                  width: 128,
-                  height: 128,
-                  borderRadius: 42,
-                  padding: 4,
-                  background: "rgba(255,255,255,0.10)",
-                  border: "1px solid rgba(255,255,255,0.16)",
+                  borderRadius: 40,
+                  border: "3px solid rgba(255,255,255,0.25)",
+                  backgroundColor: "rgba(255,255,255,0.08)",
                 }}
-              >
-                <img
-                  src={avatarBuf}
-                  alt=""
-                  width={120}
-                  height={120}
-                  style={{
-                    borderRadius: 38,
-                    border: "2px solid rgba(255,255,255,0.22)",
-                  }}
-                />
-              </div>
+              />
             ) : (
               <div
                 style={{
-                  width: 128,
-                  height: 128,
-                  borderRadius: 42,
+                  width: 120,
+                  height: 120,
+                  borderRadius: 40,
                   backgroundColor: "rgba(255,255,255,0.12)",
-                  border: "2px solid rgba(255,255,255,0.12)",
                 }}
               />
             )}
           </div>
         </div>
       ),
-      { width: 1200, height: 400 }
+      {
+        width: 1200,
+        height: 400,
+      }
     );
   } catch (e) {
     return new Response(
