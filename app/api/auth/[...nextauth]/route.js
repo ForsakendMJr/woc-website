@@ -1,5 +1,7 @@
 import NextAuth from "next-auth";
-import { authOptions } from "@/lib/authOptions";
+import { authOptions } from "./authOptions";
+
+export const runtime = "nodejs"; // IMPORTANT: next-auth v4 should run on node, not edge
 
 const handler = NextAuth(authOptions);
 
