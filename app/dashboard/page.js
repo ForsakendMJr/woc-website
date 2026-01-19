@@ -761,6 +761,8 @@ export default function DashboardPage() {
   // ✅ Welcome card preview state
   const [welcomePreviewBust, setWelcomePreviewBust] = useState(Date.now());
   const [welcomePreviewError, setWelcomePreviewError] = useState("");
+  const [welcomePreviewBlobUrl, setWelcomePreviewBlobUrl] = useState("");
+  const welcomePreviewBlobRef = useRef("");
 
   const clientIdRaw = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || "";
   const clientId = String(clientIdRaw || "").trim();
@@ -1193,6 +1195,73 @@ export default function DashboardPage() {
     session,
     welcomePreviewBust,
   ]);
+
+  // ✅ Robust PNG preview: fetch bytes -> blob URL
+  // Prevents "false red" when <img> can't decode cached/proxied responses.
+  useEffect(() => {
+    let alive = true;
+
+    async function loadPreview() {
+      // cleanup previous blob
+      if (welcomePreviewBlobRef.current) {
+        try {
+          URL.revokeObjectURL(welcomePreviewBlobRef.current);
+        } catch {}
+        welcomePreviewBlobRef.current = "";
+        if (alive) setWelcomePreviewBlobUrl("");
+      }
+
+      if (!welcomeCardPreviewUrl) return;
+
+      try {
+        const res = await fetch(welcomeCardPreviewUrl, { cache: "no-store" });
+        const ct = (res.headers.get("content-type") || "").toLowerCase();
+        const buf = await res.arrayBuffer();
+
+        // Validate PNG signature: 89 50 4E 47 0D 0A 1A 0A
+        const sig = new Uint8Array(buf.slice(0, 8));
+        const okPng =
+          sig.length === 8 &&
+          sig[0] === 0x89 &&
+          sig[1] === 0x50 &&
+          sig[2] === 0x4e &&
+          sig[3] === 0x47 &&
+          sig[4] === 0x0d &&
+          sig[5] === 0x0a &&
+          sig[6] === 0x1a &&
+          sig[7] === 0x0a;
+
+        if (!res.ok) {
+          const txt = new TextDecoder().decode(buf.slice(0, 220));
+          throw new Error(`Preview failed. Status ${res.status}. ${safeErrorMessage(txt)}`);
+        }
+
+        if (!okPng) {
+          const txt = new TextDecoder().decode(buf.slice(0, 220));
+          throw new Error(
+            `Preview returned non-PNG bytes (ct: ${ct || "(none)"}). ${safeErrorMessage(txt)}`
+          );
+        }
+
+        const blob = new Blob([buf], { type: "image/png" });
+        const url = URL.createObjectURL(blob);
+        welcomePreviewBlobRef.current = url;
+        if (alive) {
+          setWelcomePreviewBlobUrl(url);
+          setWelcomePreviewError("");
+        }
+      } catch (e) {
+        if (!alive) return;
+        setWelcomePreviewBlobUrl("");
+        setWelcomePreviewError(String(e?.message || e));
+      }
+    }
+
+    loadPreview();
+    return () => {
+      alive = false;
+    };
+  }, [welcomeCardPreviewUrl]);
 
   return (
     <div className="max-w-7xl mx-auto px-6 lg:px-10 py-12">
@@ -2382,9 +2451,12 @@ export default function DashboardPage() {
 {(() => {
   const bust = `__ts=${welcomePreviewBust || Date.now()}`;
 
-  const previewSrc = welcomeCardPreviewUrl
+  const networkUrl = welcomeCardPreviewUrl
     ? `${welcomeCardPreviewUrl}${welcomeCardPreviewUrl.includes("?") ? "&" : "?"}${bust}`
     : "";
+
+  // Prefer the blob URL (verified PNG bytes) when available.
+  const previewSrc = welcomePreviewBlobUrl || networkUrl;
 
   async function diagnosePreview(url) {
     try {
@@ -2472,7 +2544,7 @@ export default function DashboardPage() {
           onError={() => {
             if (!previewSrc) return;
             // Diagnose, but don't automatically "red box" if it's actually a PNG.
-            diagnosePreview(previewSrc);
+            diagnosePreview(networkUrl || previewSrc);
           }}
           onLoad={() => setWelcomePreviewError("")}
         />
