@@ -1,4 +1,4 @@
-import { ImageResponse } from "next/og";
+import { ImageResponse } from "@vercel/og";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
@@ -50,6 +50,39 @@ function hexToRgb(hex) {
   return { r, g, b };
 }
 
+// Fetch remote image bytes and convert to a data: URL.
+// This avoids cases where the OG renderer can't fetch external images reliably.
+async function fetchToDataUri(inputUrl) {
+  const u = String(inputUrl || "").trim();
+  if (!u) return "";
+  if (!/^https?:\/\//i.test(u)) return "";
+
+  try {
+    const res = await fetch(u, {
+      // Edge fetch: keep it simple
+      cache: "no-store",
+      headers: {
+        // Some CDNs are picky without UA/accept
+        "accept": "image/avif,image/webp,image/apng,image/png,image/*,*/*;q=0.8",
+      },
+    });
+    if (!res.ok) return "";
+
+    const ct = res.headers.get("content-type") || "";
+    const buf = await res.arrayBuffer();
+
+    // default to png if unknown
+    const mime = ct.includes("image/") ? ct.split(";")[0] : "image/png";
+    const bytes = new Uint8Array(buf);
+    let bin = "";
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    const b64 = btoa(bin);
+    return `data:${mime};base64,${b64}`;
+  } catch {
+    return "";
+  }
+}
+
 export async function GET(req, ctx) {
   const url = new URL(req.url);
   const guildId = getGuildId(req, ctx);
@@ -99,10 +132,17 @@ export async function GET(req, ctx) {
   const subtitle =
     url.searchParams.get("subtitle") || (membercount ? `Member #${membercount}` : "");
 
-  const backgroundUrl = url.searchParams.get("backgroundUrl") || "";
-  const serverIconUrl = url.searchParams.get("serverIconUrl") || "";
-  const avatarUrl = url.searchParams.get("avatarUrl") || "";
+  const backgroundUrlRaw = url.searchParams.get("backgroundUrl") || "";
+  const serverIconUrlRaw = url.searchParams.get("serverIconUrl") || "";
+  const avatarUrlRaw = url.searchParams.get("avatarUrl") || "";
   const showAvatar = url.searchParams.get("showAvatar") === "true";
+
+  // Convert remote images to data: URLs for more reliable rendering in OG.
+  const [backgroundUrl, serverIconUrl, avatarUrl] = await Promise.all([
+    fetchToDataUri(backgroundUrlRaw),
+    fetchToDataUri(serverIconUrlRaw),
+    fetchToDataUri(avatarUrlRaw),
+  ]);
 
   const backgroundColor = safeHex(url.searchParams.get("backgroundColor"), "#0b1020");
   const textColor = safeHex(url.searchParams.get("textColor"), "#ffffff");
