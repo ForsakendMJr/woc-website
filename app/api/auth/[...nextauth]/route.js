@@ -1,8 +1,17 @@
 // app/api/auth/[...nextauth]/route.js
-import NextAuth from "next-auth";
+import NextAuthImport from "next-auth";
 import DiscordProvider from "next-auth/providers/discord";
 
-export const runtime = "nodejs"; // next-auth v4 expects Node runtime
+export const runtime = "nodejs"; // ✅ next-auth v4 expects Node runtime
+
+// ✅ Handles both CJS and ESM shapes after bundling
+const NextAuth = NextAuthImport?.default ?? NextAuthImport;
+
+if (typeof NextAuth !== "function") {
+  throw new Error(
+    `NextAuth import is not a function. Got: ${typeof NextAuth}. (CJS/ESM interop issue)`
+  );
+}
 
 const handler = NextAuth({
   secret: process.env.NEXTAUTH_SECRET,
@@ -11,8 +20,6 @@ const handler = NextAuth({
     DiscordProvider({
       clientId: process.env.DISCORD_CLIENT_ID,
       clientSecret: process.env.DISCORD_CLIENT_SECRET,
-
-      // IMPORTANT: include guilds scope so /users/@me/guilds works
       authorization: {
         params: {
           scope: "identify email guilds",
