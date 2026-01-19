@@ -16,34 +16,26 @@ export function getAuthOptions() {
   const DISCORD_CLIENT_ID = env("DISCORD_CLIENT_ID");
   const DISCORD_CLIENT_SECRET = env("DISCORD_CLIENT_SECRET");
 
-  // If these are missing at runtime, NextAuth endpoints will 500.
-  // But we avoid crashing at build-time by not throwing at import-time.
   if (!NEXTAUTH_SECRET || !DISCORD_CLIENT_ID || !DISCORD_CLIENT_SECRET) {
-    console.error("[NextAuth] Missing env vars:", {
-      NEXTAUTH_SECRET: !!NEXTAUTH_SECRET,
-      DISCORD_CLIENT_ID: !!DISCORD_CLIENT_ID,
-      DISCORD_CLIENT_SECRET: !!DISCORD_CLIENT_SECRET,
-    });
+    throw new Error(
+      `Missing env vars: ${
+        !NEXTAUTH_SECRET ? "NEXTAUTH_SECRET " : ""
+      }${!DISCORD_CLIENT_ID ? "DISCORD_CLIENT_ID " : ""}${
+        !DISCORD_CLIENT_SECRET ? "DISCORD_CLIENT_SECRET " : ""
+      }`
+    );
   }
 
   return {
     secret: NEXTAUTH_SECRET,
-
     providers: [
       DiscordProvider({
         clientId: DISCORD_CLIENT_ID,
         clientSecret: DISCORD_CLIENT_SECRET,
-        authorization: {
-          params: {
-            // Needs guilds for /users/@me/guilds
-            scope: "identify guilds email",
-          },
-        },
+        authorization: { params: { scope: "identify email guilds" } },
       }),
     ],
-
     session: { strategy: "jwt" },
-
     callbacks: {
       async jwt({ token, account }) {
         if (account?.access_token) token.accessToken = account.access_token;
@@ -58,3 +50,4 @@ export function getAuthOptions() {
     },
   };
 }
+
