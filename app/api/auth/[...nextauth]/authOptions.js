@@ -1,5 +1,7 @@
+// app/api/auth/[...nextauth]/authOptions.js
 import DiscordProvider from "next-auth/providers/discord";
 
+// Build-safe: do NOT throw if envs are missing during build
 const hasDiscordEnv =
   !!process.env.DISCORD_CLIENT_ID && !!process.env.DISCORD_CLIENT_SECRET;
 
