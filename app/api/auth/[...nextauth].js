@@ -1,19 +1,10 @@
-// app/api/auth/[...nextauth]/route.js
-import NextAuthImport from "next-auth";
-import DiscordProvider from "next-auth/providers/discord";
+// pages/api/auth/[...nextauth].js
+const NextAuth = require("next-auth").default || require("next-auth");
+const DiscordProvider =
+  require("next-auth/providers/discord").default ||
+  require("next-auth/providers/discord");
 
-export const runtime = "nodejs"; // ✅ next-auth v4 expects Node runtime
-
-// ✅ Handles both CJS and ESM shapes after bundling
-const NextAuth = NextAuthImport?.default ?? NextAuthImport;
-
-if (typeof NextAuth !== "function") {
-  throw new Error(
-    `NextAuth import is not a function. Got: ${typeof NextAuth}. (CJS/ESM interop issue)`
-  );
-}
-
-const handler = NextAuth({
+module.exports = NextAuth({
   secret: process.env.NEXTAUTH_SECRET,
 
   providers: [
@@ -41,5 +32,3 @@ const handler = NextAuth({
     },
   },
 });
-
-export { handler as GET, handler as POST };
