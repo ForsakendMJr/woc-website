@@ -761,8 +761,6 @@ export default function DashboardPage() {
   // ✅ Welcome card preview state
   const [welcomePreviewBust, setWelcomePreviewBust] = useState(Date.now());
   const [welcomePreviewError, setWelcomePreviewError] = useState("");
-  const [welcomePreviewBlobUrl, setWelcomePreviewBlobUrl] = useState("");
-  const welcomePreviewBlobRef = useRef("");
 
   const clientIdRaw = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || "";
   const clientId = String(clientIdRaw || "").trim();
@@ -1195,73 +1193,6 @@ export default function DashboardPage() {
     session,
     welcomePreviewBust,
   ]);
-
-  // ✅ Robust PNG preview: fetch bytes -> blob URL
-  // Prevents "false red" when <img> can't decode cached/proxied responses.
-  useEffect(() => {
-    let alive = true;
-
-    async function loadPreview() {
-      // cleanup previous blob
-      if (welcomePreviewBlobRef.current) {
-        try {
-          URL.revokeObjectURL(welcomePreviewBlobRef.current);
-        } catch {}
-        welcomePreviewBlobRef.current = "";
-        if (alive) setWelcomePreviewBlobUrl("");
-      }
-
-      if (!welcomeCardPreviewUrl) return;
-
-      try {
-        const res = await fetch(welcomeCardPreviewUrl, { cache: "no-store" });
-        const ct = (res.headers.get("content-type") || "").toLowerCase();
-        const buf = await res.arrayBuffer();
-
-        // Validate PNG signature: 89 50 4E 47 0D 0A 1A 0A
-        const sig = new Uint8Array(buf.slice(0, 8));
-        const okPng =
-          sig.length === 8 &&
-          sig[0] === 0x89 &&
-          sig[1] === 0x50 &&
-          sig[2] === 0x4e &&
-          sig[3] === 0x47 &&
-          sig[4] === 0x0d &&
-          sig[5] === 0x0a &&
-          sig[6] === 0x1a &&
-          sig[7] === 0x0a;
-
-        if (!res.ok) {
-          const txt = new TextDecoder().decode(buf.slice(0, 220));
-          throw new Error(`Preview failed. Status ${res.status}. ${safeErrorMessage(txt)}`);
-        }
-
-        if (!okPng) {
-          const txt = new TextDecoder().decode(buf.slice(0, 220));
-          throw new Error(
-            `Preview returned non-PNG bytes (ct: ${ct || "(none)"}). ${safeErrorMessage(txt)}`
-          );
-        }
-
-        const blob = new Blob([buf], { type: "image/png" });
-        const url = URL.createObjectURL(blob);
-        welcomePreviewBlobRef.current = url;
-        if (alive) {
-          setWelcomePreviewBlobUrl(url);
-          setWelcomePreviewError("");
-        }
-      } catch (e) {
-        if (!alive) return;
-        setWelcomePreviewBlobUrl("");
-        setWelcomePreviewError(String(e?.message || e));
-      }
-    }
-
-    loadPreview();
-    return () => {
-      alive = false;
-    };
-  }, [welcomeCardPreviewUrl]);
 
   return (
     <div className="max-w-7xl mx-auto px-6 lg:px-10 py-12">
@@ -2447,118 +2378,141 @@ export default function DashboardPage() {
                                   />
                                 </label>
 
-{/* ✅ LIVE PREVIEW (no false-red) */}
-{(() => {
-  const bust = `__ts=${welcomePreviewBust || Date.now()}`;
-
-  const networkUrl = welcomeCardPreviewUrl
-    ? `${welcomeCardPreviewUrl}${welcomeCardPreviewUrl.includes("?") ? "&" : "?"}${bust}`
-    : "";
-
-  // Prefer the blob URL (verified PNG bytes) when available.
-  const previewSrc = welcomePreviewBlobUrl || networkUrl;
-
-  async function diagnosePreview(url) {
-    try {
-      const res = await fetch(url, { cache: "no-store" });
-      const ct = (res.headers.get("content-type") || "").toLowerCase();
-      const blob = await res.blob().catch(() => null);
-
-      // If it's a PNG with real bytes, don't show error (even if the <img> hiccuped once).
-      if (res.ok && ct.includes("image/png") && blob && blob.size > 500) {
-        setWelcomePreviewError("");
-        return;
-      }
-
-      // Otherwise, show a useful error
-      let snippet = "";
-      if (!ct.includes("image/")) {
-        const txt = await res.text().catch(() => "");
-        snippet = txt ? ` Snippet: ${txt.slice(0, 180)}${txt.length > 180 ? "…" : ""}` : "";
-      }
-
-      setWelcomePreviewError(
-        `Preview failed. Status ${res.status}. content-type: ${ct || "(none)"}.${
-          blob ? ` bytes: ${blob.size}.` : ""
-        }${snippet}`
-      );
-    } catch (e) {
-      setWelcomePreviewError(`Preview fetch failed. ${String(e?.message || e)}`);
-    }
-  }
-
-  return (
-    <div className="woc-card p-4 sm:col-span-2 mt-2">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="font-semibold text-sm">Live preview</div>
-          <div className="text-xs text-[var(--text-muted)] mt-1">
-            Renders a real PNG via <b>/api/guilds/[guildId]/welcome-card.png</b>.
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            className="woc-btn-ghost text-xs"
-            onClick={() => {
-              setWelcomePreviewError("");
-              setWelcomePreviewBust(Date.now());
-            }}
-          >
-            Refresh
-          </button>
-
-          <a
-            className={cx(
-              "woc-btn-ghost text-xs",
-              !previewSrc ? "opacity-60 pointer-events-none" : ""
-            )}
-            href={previewSrc || "#"}
-            target="_blank"
-            rel="noreferrer"
-            onClick={() => setWelcomePreviewError("")}
-          >
-            Open
-          </a>
-        </div>
-      </div>
-
-      {welcomePreviewError ? (
-        <div className="mt-3 text-xs text-rose-200/90 bg-rose-500/10 border border-rose-400/30 rounded-xl p-3">
-          <div className="font-semibold">Preview error</div>
-          <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{welcomePreviewError}</div>
-          <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
-            Check DevTools Network for the PNG request: status + content-type.
-          </div>
-        </div>
-      ) : null}
-
-      <div className="mt-3 rounded-2xl overflow-hidden border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          key={previewSrc || "nope"}
-          src={previewSrc}
-          alt="Welcome card preview"
-          className="w-full h-auto"
-          onError={() => {
-            if (!previewSrc) return;
-            // Diagnose, but don't automatically "red box" if it's actually a PNG.
-            diagnosePreview(networkUrl || previewSrc);
-          }}
-          onLoad={() => setWelcomePreviewError("")}
-        />
-      </div>
-
-      <div className="mt-3 text-[0.72rem] text-[var(--text-muted)] break-all">
-        Endpoint:{" "}
-        <span className="font-semibold text-[var(--text-main)]">
-          {previewSrc || "(not ready)"}
-        </span>
+{/* ✅ LIVE PREVIEW */}
+<div className="woc-card p-4 sm:col-span-2 mt-2">
+  <div className="flex items-start justify-between gap-3">
+    <div>
+      <div className="font-semibold text-sm">Live preview</div>
+      <div className="text-xs text-[var(--text-muted)] mt-1">
+        Renders a real PNG via <b>/api/guilds/[guildId]/welcome-card.png</b>.
       </div>
     </div>
-  );
-})()}
+
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        className="woc-btn-ghost text-xs"
+        onClick={() => {
+          setWelcomePreviewError("");
+          setWelcomePreviewBust(Date.now());
+        }}
+      >
+        Refresh
+      </button>
+
+      <a
+        className={cx(
+          "woc-btn-ghost text-xs",
+          !welcomeCardPreviewUrl ? "opacity-60 pointer-events-none" : ""
+        )}
+        href={welcomeCardPreviewUrl || "#"}
+        target="_blank"
+        rel="noreferrer"
+        onClick={() => setWelcomePreviewError("")}
+      >
+        Open
+      </a>
+    </div>
+  </div>
+
+  {/* Helper: verify the route really returns an image */}
+  {(() => {
+    const previewSrc = welcomeCardPreviewUrl || "";
+
+    async function verifyPng(url) {
+      if (!url) return { ok: false, reason: "No preview URL." };
+
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        const ct = (res.headers.get("content-type") || "").toLowerCase();
+
+        // If it isn't an image, capture a short snippet for debugging.
+        if (!ct.includes("image/")) {
+          const txt = await res.text().catch(() => "");
+          const snippet = txt ? ` Snippet: ${txt.slice(0, 180)}${txt.length > 180 ? "…" : ""}` : "";
+          return {
+            ok: false,
+            reason: `Preview route returned non-image. Status ${res.status}. content-type: ${ct || "(none)"}.${
+              snippet
+            }`,
+          };
+        }
+
+        // If it is an image but not OK, still error
+        if (!res.ok) {
+          return {
+            ok: false,
+            reason: `Preview route returned image but status ${res.status}. content-type: ${ct}.`,
+          };
+        }
+
+        // Optional: read bytes to ensure something exists (prevents “empty body” edge cases)
+        const buf = await res.arrayBuffer().catch(() => null);
+        if (!buf || buf.byteLength < 20) {
+          return {
+            ok: false,
+            reason: `Preview route returned image/png but response body looks empty (${buf?.byteLength ?? 0} bytes).`,
+          };
+        }
+
+        // Great: the route is returning an image.
+        return { ok: true, reason: `OK (status ${res.status}, ${ct}, ${buf.byteLength} bytes)` };
+      } catch (e) {
+        return { ok: false, reason: `Fetch failed: ${String(e?.message || e)}` };
+      }
+    }
+
+    return (
+      <>
+        {welcomePreviewError ? (
+          <div className="mt-3 text-xs text-rose-200/90 bg-rose-500/10 border border-rose-400/30 rounded-xl p-3">
+            <div className="font-semibold">Preview notice</div>
+            <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">
+              {welcomePreviewError}
+            </div>
+            <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
+              Tip: Open the Endpoint in a new tab. If it renders there, your route is fine.
+            </div>
+          </div>
+        ) : null}
+
+        <div className="mt-3 rounded-2xl overflow-hidden border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            key={previewSrc || "nope"}
+            src={previewSrc}
+            alt="Welcome card preview"
+            className="w-full h-auto"
+            onLoad={() => setWelcomePreviewError("")}
+            onError={async () => {
+              // ✅ Don’t instantly scream “broken”. Verify first.
+              const check = await verifyPng(previewSrc);
+
+              if (check.ok) {
+                // Browser couldn't decode, but the route returned a real image.
+                // Treat as a soft warning instead of a red “route is broken”.
+                setWelcomePreviewError(
+                  `PNG returned, but the browser couldn’t decode it this time. ${check.reason}. Try Refresh.`
+                );
+              } else {
+                // Real failure (non-image, 401/500, HTML, etc.)
+                setWelcomePreviewError(check.reason);
+              }
+            }}
+          />
+        </div>
+
+        <div className="mt-3 text-[0.72rem] text-[var(--text-muted)] break-all">
+          Endpoint:{" "}
+          <span className="font-semibold text-[var(--text-main)]">
+            {previewSrc || "(not ready)"}
+          </span>
+        </div>
+      </>
+    );
+  })()}
+</div>
+
 
                                 {/* ✅ Auto role ID (was below your preview before) */}
                                 <label className="woc-card p-4 sm:col-span-2">

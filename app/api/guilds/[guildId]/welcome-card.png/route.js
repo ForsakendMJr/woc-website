@@ -1,8 +1,9 @@
-import { ImageResponse } from "@vercel/og";
+import { ImageResponse } from "next/og";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
 
+// ---------- helpers ----------
 function isSnowflake(id) {
   const s = String(id || "").trim();
   return /^[0-9]{17,20}$/.test(s);
@@ -18,10 +19,13 @@ function pickFirst(...vals) {
 
 function getGuildId(req, ctx) {
   const url = new URL(req.url);
+
   const fromParams = ctx?.params?.guildId;
   const fromQuery = url.searchParams.get("guildId");
+
   const m = url.pathname.match(/\/api\/guilds\/([^/]+)\/welcome-card\.png$/i);
   const fromPath = m?.[1];
+
   const gid = pickFirst(fromParams, fromPath, fromQuery);
   return isSnowflake(gid) ? gid : "";
 }
@@ -50,43 +54,62 @@ function hexToRgb(hex) {
   return { r, g, b };
 }
 
-// Fetch remote image bytes and convert to a data: URL.
-// This avoids cases where the OG renderer can't fetch external images reliably.
-async function fetchToDataUri(inputUrl) {
-  const u = String(inputUrl || "").trim();
-  if (!u) return "";
-  if (!/^https?:\/\//i.test(u)) return "";
+function safeText(input, max = 240) {
+  const s = String(input || "").trim();
+  if (!s) return "";
+  return s.length > max ? s.slice(0, max) + "…" : s;
+}
 
+function safeUrl(u) {
+  const s = String(u || "").trim();
+  if (!s) return "";
+  if (s.length > 1400) return ""; // guard: query strings can get gnarly
   try {
-    const res = await fetch(u, {
-      // Edge fetch: keep it simple
-      cache: "no-store",
-      headers: {
-        // Some CDNs are picky without UA/accept
-        "accept": "image/avif,image/webp,image/apng,image/png,image/*,*/*;q=0.8",
-      },
-    });
-    if (!res.ok) return "";
-
-    const ct = res.headers.get("content-type") || "";
-    const buf = await res.arrayBuffer();
-
-    // default to png if unknown
-    const mime = ct.includes("image/") ? ct.split(";")[0] : "image/png";
-    const bytes = new Uint8Array(buf);
-    let bin = "";
-    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-    const b64 = btoa(bin);
-    return `data:${mime};base64,${b64}`;
+    const url = new URL(s);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return "";
+    return url.toString();
   } catch {
     return "";
   }
 }
 
+async function fetchImageAsArrayBuffer(url) {
+  const u = safeUrl(url);
+  if (!u) return null;
+
+  // Tiny timeout to avoid hanging renders
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), 2500);
+
+  try {
+    const res = await fetch(u, {
+      cache: "no-store",
+      signal: ac.signal,
+      headers: { Accept: "image/*" },
+    });
+
+    if (!res.ok) return null;
+
+    const ct = (res.headers.get("content-type") || "").toLowerCase();
+    if (!ct.includes("image/")) return null;
+
+    const buf = await res.arrayBuffer();
+    if (!buf || buf.byteLength < 32) return null;
+
+    return buf;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// ---------- route ----------
 export async function GET(req, ctx) {
   const url = new URL(req.url);
   const guildId = getGuildId(req, ctx);
 
+  // 🔎 Debug mode (kept)
   if (url.searchParams.get("debug") === "1") {
     return new Response(
       JSON.stringify(
@@ -125,33 +148,38 @@ export async function GET(req, ctx) {
   }
 
   // Inputs
-  const serverName = url.searchParams.get("serverName") || "Server";
-  const username = url.searchParams.get("username") || "New Member";
-  const membercount = url.searchParams.get("membercount") || "";
-  const title = url.searchParams.get("title") || `${username} just joined the server`;
-  const subtitle =
-    url.searchParams.get("subtitle") || (membercount ? `Member #${membercount}` : "");
+  const serverName = safeText(url.searchParams.get("serverName") || "Server", 80);
+  const username = safeText(url.searchParams.get("username") || "New Member", 60);
+  const tag = safeText(url.searchParams.get("tag") || "", 40);
+  const membercount = safeText(url.searchParams.get("membercount") || "", 12);
 
-  const backgroundUrlRaw = url.searchParams.get("backgroundUrl") || "";
-  const serverIconUrlRaw = url.searchParams.get("serverIconUrl") || "";
-  const avatarUrlRaw = url.searchParams.get("avatarUrl") || "";
+  const title = safeText(
+    url.searchParams.get("title") || `${username} just joined the server`,
+    80
+  );
+  const subtitle = safeText(
+    url.searchParams.get("subtitle") || (membercount ? `Member #${membercount}` : ""),
+    60
+  );
+
+  const backgroundUrl = url.searchParams.get("backgroundUrl") || "";
+  const serverIconUrl = url.searchParams.get("serverIconUrl") || "";
+  const avatarUrl = url.searchParams.get("avatarUrl") || "";
   const showAvatar = url.searchParams.get("showAvatar") === "true";
 
-  // Convert remote images to data: URLs for more reliable rendering in OG.
-  const [backgroundUrl, serverIconUrl, avatarUrl] = await Promise.all([
-    fetchToDataUri(backgroundUrlRaw),
-    fetchToDataUri(serverIconUrlRaw),
-    fetchToDataUri(avatarUrlRaw),
-  ]);
-
+  // Defaults (never white unless asked)
   const backgroundColor = safeHex(url.searchParams.get("backgroundColor"), "#0b1020");
   const textColor = safeHex(url.searchParams.get("textColor"), "#ffffff");
   const overlayOpacity = clamp01(url.searchParams.get("overlayOpacity"), 0.35);
 
   const { r, g, b } = hexToRgb(backgroundColor);
 
-  // ✅ plain=1 disables ALL external images to prove rendering works
-  const plain = url.searchParams.get("plain") === "1";
+  // ✅ Pre-fetch images to avoid flakey <img src="https://..."> inside the renderer
+  const [bgBuf, iconBuf, avatarBuf] = await Promise.all([
+    fetchImageAsArrayBuffer(backgroundUrl),
+    fetchImageAsArrayBuffer(serverIconUrl),
+    fetchImageAsArrayBuffer(avatarUrl),
+  ]);
 
   try {
     return new ImageResponse(
@@ -163,22 +191,18 @@ export async function GET(req, ctx) {
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            padding: 48,
+            padding: 44,
             position: "relative",
-            overflow: "hidden",
+            backgroundColor,
             color: textColor,
             fontFamily: "system-ui, Segoe UI, Inter, Arial",
-
-            // Strongly non-white base + a subtle gradient layer
-            backgroundColor,
-            backgroundImage:
-              "radial-gradient(900px 350px at 20% 20%, rgba(124,58,237,0.35), transparent 60%), radial-gradient(700px 320px at 80% 30%, rgba(16,185,129,0.22), transparent 55%)",
+            overflow: "hidden",
           }}
         >
-          {/* Background image */}
-          {!plain && backgroundUrl ? (
+          {/* Background image (bytes) */}
+          {bgBuf ? (
             <img
-              src={backgroundUrl}
+              src={bgBuf}
               alt=""
               style={{
                 position: "absolute",
@@ -190,7 +214,7 @@ export async function GET(req, ctx) {
             />
           ) : null}
 
-          {/* Overlay */}
+          {/* Dark overlay for readability */}
           <div
             style={{
               position: "absolute",
@@ -199,71 +223,168 @@ export async function GET(req, ctx) {
             }}
           />
 
-          {/* Left */}
-          <div style={{ position: "relative", display: "flex", gap: 18, alignItems: "center" }}>
-            {!plain && serverIconUrl ? (
+          {/* Accent glow blobs (unique styling, still OG-safe) */}
+          <div
+            style={{
+              position: "absolute",
+              left: -120,
+              top: -140,
+              width: 520,
+              height: 520,
+              borderRadius: 520,
+              background: "rgba(124,58,237,0.22)",
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              right: -140,
+              bottom: -180,
+              width: 560,
+              height: 560,
+              borderRadius: 560,
+              background: "rgba(16,185,129,0.16)",
+            }}
+          />
+
+          {/* Glass-ish panel (no backdropFilter, OG-safe) */}
+          <div
+            style={{
+              position: "absolute",
+              inset: 22,
+              borderRadius: 34,
+              border: "1px solid rgba(255,255,255,0.14)",
+              background: "rgba(255,255,255,0.06)",
+            }}
+          />
+
+          {/* Left: server block */}
+          <div
+            style={{
+              position: "relative",
+              display: "flex",
+              gap: 16,
+              alignItems: "center",
+              minWidth: 340,
+            }}
+          >
+            {iconBuf ? (
               <img
-                src={serverIconUrl}
+                src={iconBuf}
                 alt=""
-                width={84}
-                height={84}
+                width={86}
+                height={86}
                 style={{
                   borderRadius: 26,
-                  border: "2px solid rgba(255,255,255,0.18)",
-                  background: "rgba(255,255,255,0.08)",
+                  border: "2px solid rgba(255,255,255,0.20)",
+                  background: "rgba(255,255,255,0.10)",
                 }}
               />
             ) : (
               <div
                 style={{
-                  width: 84,
-                  height: 84,
+                  width: 86,
+                  height: 86,
                   borderRadius: 26,
                   backgroundColor: "rgba(255,255,255,0.12)",
+                  border: "2px solid rgba(255,255,255,0.12)",
                 }}
               />
             )}
 
             <div style={{ display: "flex", flexDirection: "column" }}>
-              <div style={{ fontSize: 22, opacity: 0.92 }}>{serverName}</div>
-              <div style={{ fontSize: 14, opacity: 0.75 }}>guildId: {guildId}</div>
-              {plain ? (
-                <div style={{ fontSize: 12, opacity: 0.7 }}>(plain mode)</div>
+              <div style={{ fontSize: 14, opacity: 0.78, letterSpacing: 1.2 }}>
+                WELCOME
+              </div>
+              <div style={{ fontSize: 24, fontWeight: 700, opacity: 0.96 }}>
+                {serverName}
+              </div>
+              <div style={{ fontSize: 13, opacity: 0.72 }}>
+                {tag ? `${tag} • ` : ""}guildId: {guildId}
+              </div>
+            </div>
+          </div>
+
+          {/* Middle: text */}
+          <div style={{ position: "relative", flex: 1, padding: "0 34px" }}>
+            <div
+              style={{
+                fontSize: 46,
+                fontWeight: 900,
+                lineHeight: 1.06,
+                letterSpacing: -0.6,
+              }}
+            >
+              {title}
+            </div>
+
+            {subtitle ? (
+              <div style={{ fontSize: 22, marginTop: 12, opacity: 0.9 }}>
+                {subtitle}
+              </div>
+            ) : null}
+
+            <div
+              style={{
+                marginTop: 16,
+                display: "inline-flex",
+                gap: 10,
+                alignItems: "center",
+                padding: "8px 12px",
+                borderRadius: 999,
+                border: "1px solid rgba(255,255,255,0.14)",
+                background: "rgba(0,0,0,0.18)",
+                fontSize: 13,
+                opacity: 0.92,
+              }}
+            >
+              <span style={{ opacity: 0.9 }}>User:</span>
+              <span style={{ fontWeight: 700 }}>{username}</span>
+              {membercount ? (
+                <span style={{ opacity: 0.85 }}>• Member #{membercount}</span>
               ) : null}
             </div>
           </div>
 
-          {/* Middle */}
-          <div style={{ position: "relative", flex: 1, padding: "0 32px" }}>
-            <div style={{ fontSize: 48, fontWeight: 900, lineHeight: 1.05, letterSpacing: -0.6 }}>
-              {title}
-            </div>
-            {subtitle ? (
-              <div style={{ fontSize: 22, marginTop: 12, opacity: 0.9 }}>{subtitle}</div>
-            ) : null}
-          </div>
-
-          {/* Right */}
-          <div style={{ position: "relative", width: 160, display: "flex", justifyContent: "flex-end" }}>
-            {!plain && showAvatar && avatarUrl ? (
-              <img
-                src={avatarUrl}
-                alt=""
-                width={120}
-                height={120}
+          {/* Right: avatar */}
+          <div
+            style={{
+              position: "relative",
+              width: 170,
+              display: "flex",
+              justifyContent: "flex-end",
+            }}
+          >
+            {showAvatar && avatarBuf ? (
+              <div
                 style={{
-                  borderRadius: 40,
-                  border: "3px solid rgba(255,255,255,0.25)",
-                  background: "rgba(255,255,255,0.08)",
+                  width: 128,
+                  height: 128,
+                  borderRadius: 42,
+                  padding: 4,
+                  background: "rgba(255,255,255,0.10)",
+                  border: "1px solid rgba(255,255,255,0.16)",
                 }}
-              />
+              >
+                <img
+                  src={avatarBuf}
+                  alt=""
+                  width={120}
+                  height={120}
+                  style={{
+                    borderRadius: 38,
+                    border: "2px solid rgba(255,255,255,0.22)",
+                  }}
+                />
+              </div>
             ) : (
               <div
                 style={{
-                  width: 120,
-                  height: 120,
-                  borderRadius: 40,
+                  width: 128,
+                  height: 128,
+                  borderRadius: 42,
                   backgroundColor: "rgba(255,255,255,0.12)",
+                  border: "2px solid rgba(255,255,255,0.12)",
                 }}
               />
             )}
@@ -274,7 +395,11 @@ export async function GET(req, ctx) {
     );
   } catch (e) {
     return new Response(
-      JSON.stringify({ error: "Image render failed", message: String(e?.message || e) }, null, 2),
+      JSON.stringify(
+        { error: "Image render failed", message: String(e?.message || e) },
+        null,
+        2
+      ),
       { status: 500, headers: { "content-type": "application/json" } }
     );
   }
