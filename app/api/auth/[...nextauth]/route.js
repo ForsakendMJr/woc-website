@@ -1,39 +1,28 @@
-import NextAuth from "next-auth";
-import DiscordProvider from "next-auth/providers/discord";
+// app/api/auth/[...nextauth]/route.js
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-const authOptions = {
-  secret: process.env.NEXTAUTH_SECRET,
+async function getHandler() {
+  const nextAuthMod = await import("next-auth");
+  const { authOptions } = await import("./authOptions.js");
 
-  providers: [
-    DiscordProvider({
-      clientId: process.env.DISCORD_CLIENT_ID,
-      clientSecret: process.env.DISCORD_CLIENT_SECRET,
-      authorization: {
-        params: {
-          scope: "identify email guilds",
-        },
-      },
-    }),
-  ],
+  const NextAuth = nextAuthMod?.default ?? nextAuthMod;
 
-  session: { strategy: "jwt" },
+  if (typeof NextAuth !== "function") {
+    throw new Error(
+      `NextAuth import is not a function. Got: ${typeof NextAuth}.`
+    );
+  }
 
-  callbacks: {
-    async jwt({ token, account, profile }) {
-      if (account?.access_token) {
-        token.accessToken = account.access_token;
-      }
-      if (profile?.id) token.discordId = profile.id;
-      return token;
-    },
+  return NextAuth(authOptions);
+}
 
-    async session({ session, token }) {
-      if (token?.accessToken) session.accessToken = token.accessToken;
-      if (token?.discordId) session.discordId = token.discordId;
-      return session;
-    },
-  },
-};
+export async function GET(req) {
+  const handler = await getHandler();
+  return handler(req);
+}
 
-const handler = NextAuth(authOptions);
-export { handler as GET, handler as POST };
+export async function POST(req) {
+  const handler = await getHandler();
+  return handler(req);
+}
