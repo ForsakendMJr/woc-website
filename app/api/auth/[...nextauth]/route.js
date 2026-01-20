@@ -1,19 +1,16 @@
-// app/api/auth/[...nextauth]/route.js
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 async function getHandler() {
   const nextAuthMod = await import("next-auth");
-  const { authOptions } = await import("./authOptions.js");
+  const { getAuthOptions } = await import("./authOptions.js");
 
   const NextAuth = nextAuthMod?.default ?? nextAuthMod;
-
   if (typeof NextAuth !== "function") {
-    throw new Error(
-      `NextAuth import is not a function. Got: ${typeof NextAuth}.`
-    );
+    throw new Error(`NextAuth import is not a function. Got: ${typeof NextAuth}.`);
   }
 
+  const authOptions = await getAuthOptions();
   return NextAuth(authOptions);
 }
 
