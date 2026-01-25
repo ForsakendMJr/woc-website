@@ -758,6 +758,8 @@ export default function DashboardPage() {
   const [moduleCategory, setModuleCategory] = useState("moderation");
   const [moduleSearch, setModuleSearch] = useState("");
 
+  const [welcomeBgNotice, setWelcomeBgNotice] = useState("");
+
   // ✅ Welcome card preview state
   const [welcomePreviewBust, setWelcomePreviewBust] = useState(Date.now());
   const [welcomePreviewError, setWelcomePreviewError] = useState("");
@@ -2394,6 +2396,7 @@ export default function DashboardPage() {
         className="woc-btn-ghost text-xs"
         onClick={() => {
           setWelcomePreviewError("");
+          setWelcomeBgNotice("");
           setWelcomePreviewBust(Date.now());
         }}
       >
@@ -2408,7 +2411,10 @@ export default function DashboardPage() {
         href={welcomeCardPreviewUrl || "#"}
         target="_blank"
         rel="noreferrer"
-        onClick={() => setWelcomePreviewError("")}
+        onClick={() => {
+          setWelcomePreviewError("");
+          setWelcomeBgNotice("");
+        }}
       >
         Open
       </a>
@@ -2422,26 +2428,74 @@ export default function DashboardPage() {
     function sanitizePreviewUrl(u) {
       try {
         if (!u) return "";
-        const x = new URL(u, typeof window !== "undefined" ? window.location.origin : "http://localhost");
+        const x = new URL(
+          u,
+          typeof window !== "undefined" ? window.location.origin : "http://localhost"
+        );
+
         const hideKeys = new Set([
           "backgroundUrl",
           "backgroundImageUrl",
           "avatarUrl",
           "serverIconUrl",
           "_",
+          "meta",
         ]);
 
         for (const k of Array.from(x.searchParams.keys())) {
           if (hideKeys.has(k)) x.searchParams.set(k, "…");
         }
 
-        // Also clamp title/subtitle so the endpoint display stays tidy
-        if (x.searchParams.get("title")?.length > 60) x.searchParams.set("title", x.searchParams.get("title").slice(0, 60) + "…");
-        if (x.searchParams.get("subtitle")?.length > 60) x.searchParams.set("subtitle", x.searchParams.get("subtitle").slice(0, 60) + "…");
+        if (x.searchParams.get("title")?.length > 60)
+          x.searchParams.set("title", x.searchParams.get("title").slice(0, 60) + "…");
+        if (x.searchParams.get("subtitle")?.length > 60)
+          x.searchParams.set("subtitle", x.searchParams.get("subtitle").slice(0, 60) + "…");
 
         return x.pathname + "?" + x.searchParams.toString();
       } catch {
         return u;
+      }
+    }
+
+    function makeMetaUrl(u) {
+      try {
+        if (!u) return "";
+        const x = new URL(
+          u,
+          typeof window !== "undefined" ? window.location.origin : "http://localhost"
+        );
+        x.searchParams.set("meta", "1");
+        return x.toString();
+      } catch {
+        return "";
+      }
+    }
+
+    async function checkBackgroundNotice(u) {
+      setWelcomeBgNotice("");
+      const metaUrl = makeMetaUrl(u);
+      if (!metaUrl) return;
+
+      try {
+        const res = await fetch(metaUrl, { cache: "no-store" });
+        const j = await res.json().catch(() => null);
+
+        const status = j?.background?.status; // ok | blocked_html | fetch_failed | none
+        const input = j?.background?.input || "";
+
+        if (status === "blocked_html") {
+          setWelcomeBgNotice(
+            "Background blocked by host (the URL returned HTML or denied hotlinking). Try a different host or upload the image into /public and use /your-file.jpg."
+          );
+        } else if (status === "fetch_failed" && input) {
+          setWelcomeBgNotice(
+            "Background fetch failed (403/expired/blocked). Try a different image URL or upload it locally."
+          );
+        } else {
+          setWelcomeBgNotice("");
+        }
+      } catch {
+        // silent (don’t spam)
       }
     }
 
@@ -2457,20 +2511,10 @@ export default function DashboardPage() {
           const raw = await res.text().catch(() => "");
           let msg = raw;
 
-          // Try parse JSON { ok:false, error:"..." }
           try {
             const j = JSON.parse(raw);
             if (j?.error) msg = String(j.error);
           } catch {}
-
-          // Special friendly warning
-          if (String(msg).toLowerCase().includes("background blocked by host")) {
-            return {
-              ok: false,
-              reason:
-                "Background blocked by host (the site returned HTML or denied hotlinking). Try a different image URL or upload the image into your own /public folder.",
-            };
-          }
 
           const snippet =
             msg && msg.length > 0
@@ -2479,9 +2523,9 @@ export default function DashboardPage() {
 
           return {
             ok: false,
-            reason: `Preview route returned non-image. Status ${res.status}. content-type: ${ct || "(none)"}.${
-              snippet
-            }`,
+            reason: `Preview route returned non-image. Status ${res.status}. content-type: ${
+              ct || "(none)"
+            }.${snippet}`,
           };
         }
 
@@ -2496,7 +2540,9 @@ export default function DashboardPage() {
         if (!buf || buf.byteLength < 20) {
           return {
             ok: false,
-            reason: `Preview route returned image but response body looks empty (${buf?.byteLength ?? 0} bytes).`,
+            reason: `Preview route returned image but response body looks empty (${
+              buf?.byteLength ?? 0
+            } bytes).`,
           };
         }
 
@@ -2510,6 +2556,14 @@ export default function DashboardPage() {
 
     return (
       <>
+        {/* ✅ Background warnings (amber, not scary red) */}
+        {welcomeBgNotice ? (
+          <div className="mt-3 text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
+            <div className="font-semibold">Background notice</div>
+            <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">{welcomeBgNotice}</div>
+          </div>
+        ) : null}
+
         {welcomePreviewError ? (
           <div className="mt-3 text-xs text-rose-200/90 bg-rose-500/10 border border-rose-400/30 rounded-xl p-3">
             <div className="font-semibold">Preview notice</div>
@@ -2529,7 +2583,11 @@ export default function DashboardPage() {
             src={previewSrc}
             alt="Welcome card preview"
             className="w-full h-auto"
-            onLoad={() => setWelcomePreviewError("")}
+            onLoad={() => {
+              setWelcomePreviewError("");
+              // ✅ even if the PNG loads fine, check whether the BG was blocked
+              checkBackgroundNotice(previewSrc);
+            }}
             onError={async () => {
               const check = await verifyPng(previewSrc);
 
@@ -2540,6 +2598,9 @@ export default function DashboardPage() {
               } else {
                 setWelcomePreviewError(check.reason);
               }
+
+              // still check BG status (useful when PNG fails too)
+              checkBackgroundNotice(previewSrc);
             }}
           />
         </div>
@@ -2554,6 +2615,7 @@ export default function DashboardPage() {
     );
   })()}
 </div>
+
 
 
 
