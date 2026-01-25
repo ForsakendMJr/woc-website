@@ -4,23 +4,16 @@ import sharp from "sharp";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function q(url, key, fallback = "") {
-  return url.searchParams.get(key) ?? fallback;
+// --- helpers ---
+function qp(url, key, fallback = "") {
+  const v = url.searchParams.get(key);
+  return v == null || v === "" ? fallback : v;
 }
 
-async function fetchAsDataUri(url) {
-  if (!url) return null;
-  try {
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) return null;
-
-    const ct = res.headers.get("content-type") || "image/png";
-    const buf = Buffer.from(await res.arrayBuffer());
-    const base64 = buf.toString("base64");
-    return `data:${ct};base64,${base64}`;
-  } catch {
-    return null;
-  }
+function clamp(n, min, max) {
+  n = Number(n);
+  if (Number.isNaN(n)) return min;
+  return Math.max(min, Math.min(max, n));
 }
 
 function esc(s) {
@@ -32,108 +25,160 @@ function esc(s) {
     .replaceAll("'", "&#039;");
 }
 
+async function fetchAsDataUri(url) {
+  if (!url) return null;
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return null;
+
+    const ct = res.headers.get("content-type") || "image/png";
+    const buf = Buffer.from(await res.arrayBuffer());
+    return `data:${ct};base64,${buf.toString("base64")}`;
+  } catch {
+    return null;
+  }
+}
+
+function truncate(s, max = 48) {
+  s = String(s || "");
+  if (s.length <= max) return s;
+  return s.slice(0, Math.max(0, max - 1)) + "…";
+}
+
 export async function GET(req) {
   try {
     const url = new URL(req.url);
 
-    // Your query params (based on your screenshot)
-    const serverName = esc(q(url, "serverName", "Web of Communities"));
-    const username = esc(q(url, "username", "New Member"));
-    const subtitle = esc(q(url, "subtitle", "just joined the server"));
-    const memberCount = esc(q(url, "membercount", "1"));
+    // --- match your UI fields ---
+    const backgroundImageUrl = qp(url, "backgroundImageUrl", qp(url, "background", ""));
+    const title = truncate(qp(url, "title", "Welcome!"), 54);
+    const subtitle = truncate(qp(url, "subtitle", ""), 60);
 
-    const avatarUrl = q(url, "avatarUrl", "");
-    const serverIconUrl = q(url, "serverIconUrl", "");
+    const bgColor = qp(url, "backgroundColor", "#0b1020");
+    const textColor = qp(url, "textColor", "#ffffff");
+    const overlayOpacity = clamp(qp(url, "overlayOpacity", "0.35"), 0, 0.85);
 
-    // Optional styling params (you can keep using your current ones)
-    const backgroundColor = q(url, "backgroundColor", "#0b1020");
-    const textColor = q(url, "textColor", "#ffffff");
-    const accentColor = q(url, "accentColor", "#8b5cf6"); // violet-ish
+    const showAvatar = qp(url, "showAvatar", "true") !== "false";
 
-    // Fetch images and embed as data URIs so sharp can render them reliably
-    const [avatarData, iconData] = await Promise.all([
-      fetchAsDataUri(avatarUrl),
+    // Your existing params still supported (so nothing breaks)
+    const username = truncate(qp(url, "username", ""), 36);
+    const serverName = truncate(qp(url, "serverName", ""), 40);
+    const memberCount = qp(url, "membercount", qp(url, "memberCount", ""));
+
+    const avatarUrl = qp(url, "avatarUrl", "");
+    const serverIconUrl = qp(url, "serverIconUrl", "");
+
+    // Best “Discord card” size
+    const W = 1200;
+    const H = 420;
+
+    // Fetch images (embed into SVG as data URIs for reliable sharp rendering)
+    const [bgData, avatarData, iconData] = await Promise.all([
+      fetchAsDataUri(backgroundImageUrl),
+      showAvatar ? fetchAsDataUri(avatarUrl) : Promise.resolve(null),
       fetchAsDataUri(serverIconUrl),
     ]);
 
-    // Canvas size (tweak if your UI expects different)
-    const W = 1100;
-    const H = 360;
+    // Strong Linux-safe font stack (fixes the tofu squares)
+    const FONT_STACK = "DejaVu Sans, Noto Sans, Liberation Sans, Arial, sans-serif";
 
-    // Simple SVG layout -> sharp converts to PNG
+    // Slightly smarter text: if frontend didn’t replace templates, we can still show useful content
+    const primaryLine = esc(title.replaceAll("{user.name}", username || "New member"));
+    const secondaryLine = esc(
+      subtitle
+        .replaceAll("{membercount}", memberCount || "?")
+        .replaceAll("{server.name}", serverName || "this server")
+    );
+
     const svg = `
       <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
         <defs>
-          <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stop-color="${backgroundColor}"/>
+          <linearGradient id="base" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="${bgColor}"/>
             <stop offset="100%" stop-color="#060814"/>
           </linearGradient>
 
-          <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
-            <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#000" flood-opacity="0.35"/>
+          <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
+            <feDropShadow dx="0" dy="14" stdDeviation="14" flood-color="#000" flood-opacity="0.35"/>
           </filter>
 
-          <clipPath id="circleClip">
-            <circle cx="130" cy="180" r="78"/>
+          <clipPath id="avatarClip">
+            <circle cx="172" cy="210" r="86"/>
           </clipPath>
+
           <clipPath id="iconClip">
-            <circle cx="980" cy="72" r="34"/>
+            <circle cx="1088" cy="92" r="38"/>
           </clipPath>
         </defs>
 
-        <!-- Background -->
-        <rect x="0" y="0" width="${W}" height="${H}" rx="28" fill="url(#bg)"/>
+        <!-- Base background -->
+        <rect x="0" y="0" width="${W}" height="${H}" rx="30" fill="url(#base)"/>
+
+        <!-- Optional background image -->
+        ${
+          bgData
+            ? `<image href="${bgData}" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="xMidYMid slice" opacity="1"/>`
+            : ""
+        }
+
+        <!-- Overlay to keep text readable -->
+        <rect x="0" y="0" width="${W}" height="${H}" rx="30" fill="rgba(0,0,0,${overlayOpacity})"/>
 
         <!-- Accent bar -->
-        <rect x="28" y="28" width="10" height="${H - 56}" rx="5" fill="${accentColor}" opacity="0.9"/>
+        <rect x="28" y="28" width="10" height="${H - 56}" rx="5" fill="#8b5cf6" opacity="0.95"/>
 
-        <!-- Card surface -->
-        <rect x="60" y="52" width="${W - 120}" height="${H - 104}" rx="24" fill="rgba(255,255,255,0.06)" filter="url(#softShadow)"/>
+        <!-- Card panel -->
+        <rect x="64" y="62" width="${W - 128}" height="${H - 124}" rx="26" fill="rgba(255,255,255,0.07)" filter="url(#softShadow)"/>
 
-        <!-- Avatar ring -->
-        <circle cx="130" cy="180" r="86" fill="rgba(255,255,255,0.08)"/>
-        <circle cx="130" cy="180" r="82" fill="rgba(0,0,0,0.15)"/>
-
-        ${avatarData ? `
-          <image href="${avatarData}" x="52" y="102" width="156" height="156" clip-path="url(#circleClip)"/>
-        ` : `
-          <circle cx="130" cy="180" r="78" fill="rgba(255,255,255,0.12)"/>
-          <text x="130" y="190" text-anchor="middle" font-size="44" fill="${textColor}" opacity="0.85" font-family="Arial, sans-serif">?</text>
-        `}
+        <!-- Avatar block -->
+        ${
+          avatarData
+            ? `
+            <circle cx="172" cy="210" r="96" fill="rgba(255,255,255,0.10)"/>
+            <circle cx="172" cy="210" r="92" fill="rgba(0,0,0,0.20)"/>
+            <image href="${avatarData}" x="86" y="124" width="172" height="172" clip-path="url(#avatarClip)"/>
+          `
+            : `
+            <circle cx="172" cy="210" r="86" fill="rgba(255,255,255,0.12)"/>
+          `
+        }
 
         <!-- Server icon -->
-        ${iconData ? `
-          <circle cx="980" cy="72" r="38" fill="rgba(255,255,255,0.10)"/>
-          <image href="${iconData}" x="946" y="38" width="68" height="68" clip-path="url(#iconClip)"/>
-        ` : ""}
+        ${
+          iconData
+            ? `
+            <circle cx="1088" cy="92" r="44" fill="rgba(255,255,255,0.10)"/>
+            <image href="${iconData}" x="1050" y="54" width="76" height="76" clip-path="url(#iconClip)"/>
+          `
+            : ""
+        }
 
         <!-- Text -->
-        <text x="240" y="140" font-size="42" font-weight="800" fill="${textColor}" font-family="Arial, sans-serif">
-          Welcome, ${username}
+        <text x="320" y="185" font-size="44" font-weight="800" fill="${textColor}" font-family="${FONT_STACK}">
+          ${primaryLine}
         </text>
 
-        <text x="240" y="182" font-size="22" font-weight="600" fill="${textColor}" opacity="0.85" font-family="Arial, sans-serif">
-          ${subtitle}
+        <text x="320" y="232" font-size="22" font-weight="600" fill="${textColor}" opacity="0.88" font-family="${FONT_STACK}">
+          ${secondaryLine}
         </text>
 
-        <text x="240" y="222" font-size="18" fill="${textColor}" opacity="0.7" font-family="Arial, sans-serif">
-          Server: ${serverName}
+        <!-- Tiny meta line -->
+        <text x="320" y="275" font-size="18" fill="${textColor}" opacity="0.70" font-family="${FONT_STACK}">
+          ${esc(serverName ? `Server: ${serverName}` : "")}
         </text>
 
-        <text x="240" y="254" font-size="18" fill="${textColor}" opacity="0.7" font-family="Arial, sans-serif">
-          Member count: ${memberCount}
+        <text x="320" y="304" font-size="18" fill="${textColor}" opacity="0.70" font-family="${FONT_STACK}">
+          ${esc(memberCount ? `Member #${memberCount}` : "")}
         </text>
 
         <!-- Footer -->
-        <text x="${W - 80}" y="${H - 44}" text-anchor="end" font-size="16" fill="${textColor}" opacity="0.55" font-family="Arial, sans-serif">
+        <text x="${W - 84}" y="${H - 48}" text-anchor="end" font-size="16" fill="${textColor}" opacity="0.55" font-family="${FONT_STACK}">
           WoC • Welcome Card
         </text>
       </svg>
     `;
 
-    const png = await sharp(Buffer.from(svg))
-      .png({ compressionLevel: 9 })
-      .toBuffer();
+    const png = await sharp(Buffer.from(svg)).png({ compressionLevel: 9 }).toBuffer();
 
     return new NextResponse(png, {
       headers: {
@@ -143,9 +188,6 @@ export async function GET(req) {
     });
   } catch (err) {
     console.error("[welcome-card] render error:", err);
-    return NextResponse.json(
-      { ok: false, error: String(err?.message || err) },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false, error: String(err?.message || err) }, { status: 500 });
   }
 }
