@@ -1,281 +1,67 @@
-import { ImageResponse } from "@vercel/og";
+// src/app/api/guilds/[guildId]/welcome-card.png/route.js
+import { NextResponse } from "next/server";
 
-export const dynamic = "force-dynamic";
-export const runtime = "edge";
+export const runtime = "nodejs";          // IMPORTANT (canvas/sharp need Node)
+export const dynamic = "force-dynamic";   // avoid caching weirdness while debugging
 
-function isSnowflake(id) {
-  const s = String(id || "").trim();
-  return /^[0-9]{17,20}$/.test(s);
+function num(v, fallback) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
 }
 
-function pickFirst(...vals) {
-  for (const v of vals) {
-    const s = String(v || "").trim();
-    if (s) return s;
-  }
-  return "";
+function str(v, fallback = "") {
+  return typeof v === "string" ? v : fallback;
 }
 
-function getGuildId(req, ctx) {
-  const url = new URL(req.url);
-  const fromParams = ctx?.params?.guildId;
-  const fromQuery = url.searchParams.get("guildId");
-  const m = url.pathname.match(/\/api\/guilds\/([^/]+)\/welcome-card\.png$/i);
-  const fromPath = m?.[1];
-  const gid = pickFirst(fromParams, fromPath, fromQuery);
-  return isSnowflake(gid) ? gid : "";
+// TODO: Replace this with your real renderer
+async function renderWelcomeCardPng(params) {
+  // MUST return a Buffer (or Uint8Array) with PNG bytes
+  // For now, generate a tiny 1x1 PNG so you can confirm bytes flow.
+  const png1x1 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7x0n8AAAAASUVORK5CYII=";
+  return Buffer.from(png1x1, "base64");
 }
 
-function safeHex(hex, fallback) {
-  const s = String(hex || "").trim();
-  if (/^#[0-9a-f]{6}$/i.test(s)) return s;
-  if (/^#[0-9a-f]{3}$/i.test(s)) {
-    const h = s.slice(1);
-    return `#${h[0]}${h[0]}${h[1]}${h[1]}${h[2]}${h[2]}`;
-  }
-  return fallback;
-}
-
-function clamp01(n, fallback = 0.35) {
-  const x = Number(n);
-  if (!Number.isFinite(x)) return fallback;
-  return Math.max(0, Math.min(1, x));
-}
-
-function hexToRgb(hex) {
-  const h = String(hex).replace("#", "");
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return { r, g, b };
-}
-
-// Fetch remote image bytes and convert to a data: URL.
-// This avoids cases where the OG renderer can't fetch external images reliably.
-async function fetchToDataUri(inputUrl) {
-  const u = String(inputUrl || "").trim();
-  if (!u) return "";
-  if (!/^https?:\/\//i.test(u)) return "";
-
+export async function GET(req, { params }) {
   try {
-    const res = await fetch(u, {
-      // Edge fetch: keep it simple
-      cache: "no-store",
+    const { searchParams } = new URL(req.url);
+
+    const payload = {
+      guildId: params.guildId,
+      serverName: str(searchParams.get("serverName"), "Server"),
+      memberName: str(searchParams.get("memberName"), "Member"),
+      memberCount: num(searchParams.get("memberCount"), 1),
+      avatarUrl: str(searchParams.get("avatarUrl"), ""),
+      serverIconUrl: str(searchParams.get("serverIconUrl"), ""),
+      subtitle: str(searchParams.get("subtitle"), ""),
+      backgroundColor: str(searchParams.get("backgroundColor"), "#0b1020"),
+      textColor: str(searchParams.get("textColor"), "#ffffff"),
+    };
+
+    const pngBuffer = await renderWelcomeCardPng(payload);
+
+    // 🔥 This is the key sanity check. If this logs 0, your renderer produced nothing.
+    if (!pngBuffer || pngBuffer.length === 0) {
+      console.error("[welcome-card] PNG buffer is empty", { guildId: payload.guildId });
+      return NextResponse.json(
+        { ok: false, error: "Renderer returned empty PNG buffer" },
+        { status: 500 }
+      );
+    }
+
+    return new NextResponse(pngBuffer, {
+      status: 200,
       headers: {
-        // Some CDNs are picky without UA/accept
-        "accept": "image/avif,image/webp,image/apng,image/png,image/*,*/*;q=0.8",
+        "Content-Type": "image/png",
+        "Content-Length": String(pngBuffer.length),
+        "Cache-Control": "no-store",
       },
     });
-    if (!res.ok) return "";
-
-    const ct = res.headers.get("content-type") || "";
-    const buf = await res.arrayBuffer();
-
-    // default to png if unknown
-    const mime = ct.includes("image/") ? ct.split(";")[0] : "image/png";
-    const bytes = new Uint8Array(buf);
-    let bin = "";
-    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-    const b64 = btoa(bin);
-    return `data:${mime};base64,${b64}`;
-  } catch {
-    return "";
-  }
-}
-
-export async function GET(req, ctx) {
-  const url = new URL(req.url);
-  const guildId = getGuildId(req, ctx);
-
-  if (url.searchParams.get("debug") === "1") {
-    return new Response(
-      JSON.stringify(
-        {
-          ok: true,
-          route: "welcome-card.png",
-          pathname: url.pathname,
-          params: ctx?.params ?? null,
-          guildIdResolved: guildId || null,
-          query: Object.fromEntries(url.searchParams.entries()),
-        },
-        null,
-        2
-      ),
-      { status: 200, headers: { "content-type": "application/json" } }
-    );
-  }
-
-  if (!guildId) {
-    return new Response(
-      JSON.stringify(
-        {
-          error: "Missing guildId",
-          hint: "Use /api/guilds/<guildId>/welcome-card.png or ?guildId=<guildId>.",
-          got: {
-            pathname: url.pathname,
-            params: ctx?.params ?? null,
-            queryGuildId: url.searchParams.get("guildId") || null,
-          },
-        },
-        null,
-        2
-      ),
-      { status: 400, headers: { "content-type": "application/json" } }
-    );
-  }
-
-  // Inputs
-  const serverName = url.searchParams.get("serverName") || "Server";
-  const username = url.searchParams.get("username") || "New Member";
-  const membercount = url.searchParams.get("membercount") || "";
-  const title = url.searchParams.get("title") || `${username} just joined the server`;
-  const subtitle =
-    url.searchParams.get("subtitle") || (membercount ? `Member #${membercount}` : "");
-
-  const backgroundUrlRaw = url.searchParams.get("backgroundUrl") || "";
-  const serverIconUrlRaw = url.searchParams.get("serverIconUrl") || "";
-  const avatarUrlRaw = url.searchParams.get("avatarUrl") || "";
-  const showAvatar = url.searchParams.get("showAvatar") === "true";
-
-  // Convert remote images to data: URLs for more reliable rendering in OG.
-  const [backgroundUrl, serverIconUrl, avatarUrl] = await Promise.all([
-    fetchToDataUri(backgroundUrlRaw),
-    fetchToDataUri(serverIconUrlRaw),
-    fetchToDataUri(avatarUrlRaw),
-  ]);
-
-  const backgroundColor = safeHex(url.searchParams.get("backgroundColor"), "#0b1020");
-  const textColor = safeHex(url.searchParams.get("textColor"), "#ffffff");
-  const overlayOpacity = clamp01(url.searchParams.get("overlayOpacity"), 0.35);
-
-  const { r, g, b } = hexToRgb(backgroundColor);
-
-  // ✅ plain=1 disables ALL external images to prove rendering works
-  const plain = url.searchParams.get("plain") === "1";
-
-  try {
-    return new ImageResponse(
-      (
-        <div
-          style={{
-            width: 1200,
-            height: 400,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: 48,
-            position: "relative",
-            overflow: "hidden",
-            color: textColor,
-            fontFamily: "system-ui, Segoe UI, Inter, Arial",
-
-            // Strongly non-white base + a subtle gradient layer
-            backgroundColor,
-            backgroundImage:
-              "radial-gradient(900px 350px at 20% 20%, rgba(124,58,237,0.35), transparent 60%), radial-gradient(700px 320px at 80% 30%, rgba(16,185,129,0.22), transparent 55%)",
-          }}
-        >
-          {/* Background image */}
-          {!plain && backgroundUrl ? (
-            <img
-              src={backgroundUrl}
-              alt=""
-              style={{
-                position: "absolute",
-                inset: 0,
-                width: "100%",
-                height: "100%",
-                objectFit: "cover",
-              }}
-            />
-          ) : null}
-
-          {/* Overlay */}
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              backgroundColor: `rgba(${r},${g},${b},${overlayOpacity})`,
-            }}
-          />
-
-          {/* Left */}
-          <div style={{ position: "relative", display: "flex", gap: 18, alignItems: "center" }}>
-            {!plain && serverIconUrl ? (
-              <img
-                src={serverIconUrl}
-                alt=""
-                width={84}
-                height={84}
-                style={{
-                  borderRadius: 26,
-                  border: "2px solid rgba(255,255,255,0.18)",
-                  background: "rgba(255,255,255,0.08)",
-                }}
-              />
-            ) : (
-              <div
-                style={{
-                  width: 84,
-                  height: 84,
-                  borderRadius: 26,
-                  backgroundColor: "rgba(255,255,255,0.12)",
-                }}
-              />
-            )}
-
-            <div style={{ display: "flex", flexDirection: "column" }}>
-              <div style={{ fontSize: 22, opacity: 0.92 }}>{serverName}</div>
-              <div style={{ fontSize: 14, opacity: 0.75 }}>guildId: {guildId}</div>
-              {plain ? (
-                <div style={{ fontSize: 12, opacity: 0.7 }}>(plain mode)</div>
-              ) : null}
-            </div>
-          </div>
-
-          {/* Middle */}
-          <div style={{ position: "relative", flex: 1, padding: "0 32px" }}>
-            <div style={{ fontSize: 48, fontWeight: 900, lineHeight: 1.05, letterSpacing: -0.6 }}>
-              {title}
-            </div>
-            {subtitle ? (
-              <div style={{ fontSize: 22, marginTop: 12, opacity: 0.9 }}>{subtitle}</div>
-            ) : null}
-          </div>
-
-          {/* Right */}
-          <div style={{ position: "relative", width: 160, display: "flex", justifyContent: "flex-end" }}>
-            {!plain && showAvatar && avatarUrl ? (
-              <img
-                src={avatarUrl}
-                alt=""
-                width={120}
-                height={120}
-                style={{
-                  borderRadius: 40,
-                  border: "3px solid rgba(255,255,255,0.25)",
-                  background: "rgba(255,255,255,0.08)",
-                }}
-              />
-            ) : (
-              <div
-                style={{
-                  width: 120,
-                  height: 120,
-                  borderRadius: 40,
-                  backgroundColor: "rgba(255,255,255,0.12)",
-                }}
-              />
-            )}
-          </div>
-        </div>
-      ),
-      { width: 1200, height: 400 }
-    );
-  } catch (e) {
-    return new Response(
-      JSON.stringify({ error: "Image render failed", message: String(e?.message || e) }, null, 2),
-      { status: 500, headers: { "content-type": "application/json" } }
+  } catch (err) {
+    console.error("[welcome-card] route error:", err);
+    return NextResponse.json(
+      { ok: false, error: String(err?.message || err) },
+      { status: 500 }
     );
   }
 }
