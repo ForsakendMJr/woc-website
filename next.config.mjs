@@ -1,5 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+    // ✅ Prevent bundlers (Turbopack) from trying to inline native bindings
+  serverExternalPackages: ["@resvg/resvg-js"],
   images: {
     remotePatterns: [
       {

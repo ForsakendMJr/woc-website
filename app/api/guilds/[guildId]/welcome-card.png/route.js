@@ -2,7 +2,6 @@
 import { NextResponse } from "next/server";
 import fs from "fs/promises";
 import path from "path";
-import { Resvg } from "@resvg/resvg-js";
 
 import dbConnect from "../../../../lib/mongodb";
 import GuildSettings from "../../../../models/GuildSettings";
@@ -65,6 +64,7 @@ export async function GET(req, { params }) {
   try {
     const url = new URL(req.url);
     const guildId = params?.guildId;
+    const { Resvg } = await import("@resvg/resvg-js");
 
     // --------------------------
     // Optional defaults from DB
