@@ -271,22 +271,23 @@ export async function GET(req, { params }) {
 
   <!-- ✅ Use system font fallback; Resvg handles this better than SVG embedded fonts -->
   <text x="${textX}" y="185" font-size="${titleSize}" font-weight="800"
-    font-family="Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif"
+    font-family="DejaVu Sans, Arial, sans-serif"
     fill="${textColor}">
     ${primaryLine}
   </text>
 
   <text x="${textX}" y="232" font-size="${subtitleSize}" font-weight="600"
-    font-family="Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif"
+    font-family="DejaVu Sans, Arial, sans-serif"
     fill="${textColor}" opacity="0.88">
     ${secondaryLine}
   </text>
 
   <text x="${W - 84}" y="${H - 48}" text-anchor="end" font-size="16"
-    font-family="Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif"
+    font-family="DejaVu Sans, Arial, sans-serif"
     fill="${textColor}" opacity="0.55">
     WoC • Welcome Card
   </text>
+
 </svg>
 `;
 
