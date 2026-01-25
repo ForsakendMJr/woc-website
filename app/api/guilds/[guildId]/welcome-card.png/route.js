@@ -3,8 +3,8 @@ import sharp from "sharp";
 import fs from "fs/promises";
 import path from "path";
 
-import dbConnect from "@/lib/mongodb";
-import GuildSettings from "@/models/GuildSettings";
+import dbConnect from "../../../../lib/mongodb";
+import GuildSettings from "../../../../models/GuildSettings";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
