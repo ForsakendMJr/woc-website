@@ -1,8 +1,8 @@
+// app/api/guilds/[guildId]/welcome-card.png/route.js
 import { NextResponse } from "next/server";
 import sharp from "sharp";
-import fs from "fs/promises";
-import path from "path";
 
+// ✅ Use your alias instead of brittle relative paths
 import dbConnect from "../../../../lib/mongodb";
 import GuildSettings from "../../../../models/GuildSettings";
 
@@ -47,21 +47,11 @@ async function fetchAsDataUri(url) {
     if (!res.ok) return null;
 
     const ct = (res.headers.get("content-type") || "").toLowerCase();
-    // ✅ avoid HTML pages masquerading as “background images”
+    // ✅ avoid HTML pages masquerading as images
     if (!ct.startsWith("image/")) return null;
 
     const buf = Buffer.from(await res.arrayBuffer());
     return `data:${ct};base64,${buf.toString("base64")}`;
-  } catch {
-    return null;
-  }
-}
-
-async function readPublicFontBase64(relFromPublic) {
-  try {
-    const abs = path.join(process.cwd(), "public", relFromPublic);
-    const buf = await fs.readFile(abs);
-    return buf.toString("base64");
   } catch {
     return null;
   }
@@ -82,8 +72,7 @@ export async function GET(req, { params }) {
         await dbConnect();
         const settings = await GuildSettings.findOne({ guildId }).lean();
 
-        // Adjust these keys to match your schema shape if needed.
-        // Keeping it defensive so it won't crash.
+        // adjust to your schema shape (defensive)
         const wc = settings?.welcomeCard || settings?.modules?.welcomeCard || null;
 
         if (wc && typeof wc === "object") {
@@ -95,18 +84,16 @@ export async function GET(req, { params }) {
               typeof wc.overlayOpacity === "number" ? String(wc.overlayOpacity) : "",
             title: wc.title || "",
             subtitle: wc.subtitle || "",
-            showAvatar:
-              typeof wc.showAvatar === "boolean" ? String(wc.showAvatar) : "",
+            showAvatar: typeof wc.showAvatar === "boolean" ? String(wc.showAvatar) : "",
           };
         }
       }
     } catch (e) {
-      // Don’t break image rendering if DB fails
       console.warn("[welcome-card] settings lookup failed:", e?.message || e);
     }
 
     // --------------------------
-    // Read query params (query beats DB defaults beats hard defaults)
+    // Query params (query > DB defaults > hard defaults)
     // --------------------------
     const backgroundImageUrl =
       qp(url, "backgroundUrl", "") ||
@@ -126,8 +113,7 @@ export async function GET(req, { params }) {
       0.85
     );
 
-    const showAvatar =
-      qp(url, "showAvatar", dbDefaults.showAvatar || "true") !== "false";
+    const showAvatar = qp(url, "showAvatar", dbDefaults.showAvatar || "true") !== "false";
 
     const username = truncate(qp(url, "username", ""), 36);
     const serverName = truncate(qp(url, "serverName", ""), 40);
@@ -140,31 +126,13 @@ export async function GET(req, { params }) {
     const W = 1200;
     const H = 420;
 
-    // Fonts from /public/fonts
-    const interRegular = await readPublicFontBase64("fonts/Inter-Regular.ttf");
-    const interBold = await readPublicFontBase64("fonts/Inter-ExtraBold.ttf");
+    // ✅ IMPORTANT:
+    // Step 4: DO NOT embed fonts in SVG.
+    // We rely on "Inter" being available via Fontconfig (FONTCONFIG_PATH) on the runtime.
+    const FONT_STACK =
+      "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif";
 
-    const fontCss = interRegular
-      ? `
-@font-face {
-  font-family: "InterEmbed";
-  src: url("data:font/ttf;base64,${interRegular}") format("truetype");
-  font-weight: 400;
-  font-style: normal;
-}
-${interBold ? `
-@font-face {
-  font-family: "InterEmbed";
-  src: url("data:font/ttf;base64,${interBold}") format("truetype");
-  font-weight: 800;
-  font-style: normal;
-}` : ""}
-`
-      : `
-/* fallback if font missing */
-.t { font-family: Arial, sans-serif; }
-`;
-
+    // Images
     const [bgData, avatarData, iconData] = await Promise.all([
       fetchAsDataUri(backgroundImageUrl),
       showAvatar ? fetchAsDataUri(avatarUrl) : Promise.resolve(null),
@@ -182,8 +150,7 @@ ${interBold ? `
 <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <style>
-      ${fontCss}
-      .t { font-family: ${interRegular ? '"InterEmbed", Arial, sans-serif' : "Arial, sans-serif"}; }
+      .t { font-family: ${JSON.stringify(FONT_STACK)}; }
     </style>
 
     <linearGradient id="base" x1="0" y1="0" x2="1" y2="1">
@@ -229,20 +196,15 @@ ${interBold ? `
       : ""
   }
 
-  <text x="320" y="185" font-size="44" font-weight="800"
-    font-family="${interRegular ? "InterEmbed, Arial, sans-serif" : "Arial, sans-serif"}"
-    fill="${textColor}">
+  <text class="t" x="320" y="185" font-size="44" font-weight="800" fill="${textColor}">
     ${primaryLine}
   </text>
 
-  <text x="320" y="232" font-size="22" font-weight="600"
-    font-family="${interRegular ? "InterEmbed, Arial, sans-serif" : "Arial, sans-serif"}"
-    fill="${textColor}" opacity="0.88">
+  <text class="t" x="320" y="232" font-size="22" font-weight="600" fill="${textColor}" opacity="0.88">
     ${secondaryLine}
   </text>
 
-  <text x="${W - 84}" y="${H - 48}" text-anchor="end" font-size="16"
-    font-family="${interRegular ? "InterEmbed, Arial, sans-serif" : "Arial, sans-serif"}"
+  <text class="t" x="${W - 84}" y="${H - 48}" text-anchor="end" font-size="16" font-weight="500"
     fill="${textColor}" opacity="0.55">
     WoC • Welcome Card
   </text>
