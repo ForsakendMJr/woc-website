@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import sharp from "sharp";
 import fs from "fs/promises";
 import path from "path";
+import GuildSettings from "@/models/GuildSettings";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -209,6 +210,7 @@ ${interBold ? `
     const png = await sharp(Buffer.from(svg), { density: 144 })
       .png({ compressionLevel: 9 })
       .toBuffer();
+const settings = await GuildSettings.findOne({ guildId });
 
     return new NextResponse(png, {
       headers: {
