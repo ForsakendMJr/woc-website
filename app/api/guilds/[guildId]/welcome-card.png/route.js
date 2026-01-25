@@ -1,9 +1,10 @@
-// src/app/api/guilds/[guildId]/welcome-card.png/route.js
 import { NextResponse } from "next/server";
 import sharp from "sharp";
 import fs from "fs/promises";
 import path from "path";
-import GuildSettings from "../../../../models/GuildSettings";
+
+import dbConnect from "@/lib/mongodb";
+import GuildSettings from "@/models/GuildSettings";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,18 +33,23 @@ function truncate(s, max = 48) {
 
 async function fetchAsDataUri(url) {
   if (!url) return null;
+
   try {
     const res = await fetch(url, {
       cache: "no-store",
       redirect: "follow",
       headers: {
         "User-Agent": "Mozilla/5.0",
-        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
       },
     });
+
     if (!res.ok) return null;
 
-    const ct = res.headers.get("content-type") || "image/png";
+    const ct = (res.headers.get("content-type") || "").toLowerCase();
+    // ✅ avoid HTML pages masquerading as “background images”
+    if (!ct.startsWith("image/")) return null;
+
     const buf = Buffer.from(await res.arrayBuffer());
     return `data:${ct};base64,${buf.toString("base64")}`;
   } catch {
@@ -53,34 +59,75 @@ async function fetchAsDataUri(url) {
 
 async function readPublicFontBase64(relFromPublic) {
   try {
-    // ✅ Works everywhere (local + Vercel)
     const abs = path.join(process.cwd(), "public", relFromPublic);
     const buf = await fs.readFile(abs);
     return buf.toString("base64");
-  } catch (e) {
-    console.warn("[welcome-card] font missing:", relFromPublic);
+  } catch {
     return null;
   }
 }
 
-export async function GET(req) {
+export async function GET(req, { params }) {
   try {
     const url = new URL(req.url);
+    const guildId = params?.guildId;
 
-    // Support multiple param names
+    // --------------------------
+    // Optional: load defaults from DB
+    // (fails open if DB is down / missing)
+    // --------------------------
+    let dbDefaults = {};
+    try {
+      if (guildId) {
+        await dbConnect();
+        const settings = await GuildSettings.findOne({ guildId }).lean();
+
+        // Adjust these keys to match your schema shape if needed.
+        // Keeping it defensive so it won't crash.
+        const wc = settings?.welcomeCard || settings?.modules?.welcomeCard || null;
+
+        if (wc && typeof wc === "object") {
+          dbDefaults = {
+            backgroundUrl: wc.backgroundUrl || wc.backgroundImageUrl || "",
+            backgroundColor: wc.backgroundColor || "",
+            textColor: wc.textColor || "",
+            overlayOpacity:
+              typeof wc.overlayOpacity === "number" ? String(wc.overlayOpacity) : "",
+            title: wc.title || "",
+            subtitle: wc.subtitle || "",
+            showAvatar:
+              typeof wc.showAvatar === "boolean" ? String(wc.showAvatar) : "",
+          };
+        }
+      }
+    } catch (e) {
+      // Don’t break image rendering if DB fails
+      console.warn("[welcome-card] settings lookup failed:", e?.message || e);
+    }
+
+    // --------------------------
+    // Read query params (query beats DB defaults beats hard defaults)
+    // --------------------------
     const backgroundImageUrl =
       qp(url, "backgroundUrl", "") ||
       qp(url, "backgroundImageUrl", "") ||
-      qp(url, "background", "");
+      qp(url, "background", "") ||
+      dbDefaults.backgroundUrl ||
+      "";
 
-    const title = truncate(qp(url, "title", "Welcome!"), 54);
-    const subtitle = truncate(qp(url, "subtitle", ""), 60);
+    const title = truncate(qp(url, "title", dbDefaults.title || "Welcome!"), 54);
+    const subtitle = truncate(qp(url, "subtitle", dbDefaults.subtitle || ""), 60);
 
-    const bgColor = qp(url, "backgroundColor", "#0b1020");
-    const textColor = qp(url, "textColor", "#ffffff");
-    const overlayOpacity = clamp(qp(url, "overlayOpacity", "0.35"), 0, 0.85);
+    const bgColor = qp(url, "backgroundColor", dbDefaults.backgroundColor || "#0b1020");
+    const textColor = qp(url, "textColor", dbDefaults.textColor || "#ffffff");
+    const overlayOpacity = clamp(
+      qp(url, "overlayOpacity", dbDefaults.overlayOpacity || "0.35"),
+      0,
+      0.85
+    );
 
-    const showAvatar = qp(url, "showAvatar", "true") !== "false";
+    const showAvatar =
+      qp(url, "showAvatar", dbDefaults.showAvatar || "true") !== "false";
 
     const username = truncate(qp(url, "username", ""), 36);
     const serverName = truncate(qp(url, "serverName", ""), 40);
@@ -89,16 +136,16 @@ export async function GET(req) {
     const avatarUrl = qp(url, "avatarUrl", "");
     const serverIconUrl = qp(url, "serverIconUrl", "");
 
+    // --- Canvas size ---
     const W = 1200;
     const H = 420;
 
-    // ✅ Fonts from /public/fonts
+    // Fonts from /public/fonts
     const interRegular = await readPublicFontBase64("fonts/Inter-Regular.ttf");
     const interBold = await readPublicFontBase64("fonts/Inter-ExtraBold.ttf");
 
-    const fontCss =
-      interRegular
-        ? `
+    const fontCss = interRegular
+      ? `
 @font-face {
   font-family: "InterEmbed";
   src: url("data:font/ttf;base64,${interRegular}") format("truetype");
@@ -113,12 +160,11 @@ ${interBold ? `
   font-style: normal;
 }` : ""}
 `
-        : `
+      : `
 /* fallback if font missing */
 .t { font-family: Arial, sans-serif; }
 `;
 
-    // Fetch images (bg might fail if host blocks hotlinking)
     const [bgData, avatarData, iconData] = await Promise.all([
       fetchAsDataUri(backgroundImageUrl),
       showAvatar ? fetchAsDataUri(avatarUrl) : Promise.resolve(null),
@@ -158,9 +204,7 @@ ${interBold ? `
   </defs>
 
   <rect x="0" y="0" width="${W}" height="${H}" rx="30" fill="url(#base)"/>
-
   ${bgData ? `<image href="${bgData}" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="xMidYMid slice"/>` : ""}
-
   <rect x="0" y="0" width="${W}" height="${H}" rx="30" fill="rgba(0,0,0,${overlayOpacity})"/>
 
   <rect x="28" y="28" width="10" height="${H - 56}" rx="5" fill="#8b5cf6" opacity="0.95"/>
@@ -185,7 +229,6 @@ ${interBold ? `
       : ""
   }
 
-  <!-- ✅ Explicit font-family on text (extra safety for librsvg) -->
   <text x="320" y="185" font-size="44" font-weight="800"
     font-family="${interRegular ? "InterEmbed, Arial, sans-serif" : "Arial, sans-serif"}"
     fill="${textColor}">
@@ -206,11 +249,9 @@ ${interBold ? `
 </svg>
 `;
 
-    // Slightly higher density = crisper text
     const png = await sharp(Buffer.from(svg), { density: 144 })
       .png({ compressionLevel: 9 })
       .toBuffer();
-const settings = await GuildSettings.findOne({ guildId });
 
     return new NextResponse(png, {
       headers: {
