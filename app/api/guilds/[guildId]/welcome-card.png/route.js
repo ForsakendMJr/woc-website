@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import sharp from "sharp";
 import fs from "fs/promises";
 import path from "path";
-import GuildSettings from "@/models/GuildSettings";
+import GuildSettings from "../../../../models/GuildSettings";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
