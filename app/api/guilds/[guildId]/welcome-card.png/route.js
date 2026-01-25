@@ -1,8 +1,9 @@
 // app/api/guilds/[guildId]/welcome-card.png/route.js
 import { NextResponse } from "next/server";
-import sharp from "sharp";
+import fs from "fs/promises";
+import path from "path";
+import { Resvg } from "@resvg/resvg-js";
 
-// ✅ Use your alias instead of brittle relative paths
 import dbConnect from "../../../../lib/mongodb";
 import GuildSettings from "../../../../models/GuildSettings";
 
@@ -33,7 +34,6 @@ function truncate(s, max = 48) {
 
 async function fetchAsDataUri(url) {
   if (!url) return null;
-
   try {
     const res = await fetch(url, {
       cache: "no-store",
@@ -47,7 +47,6 @@ async function fetchAsDataUri(url) {
     if (!res.ok) return null;
 
     const ct = (res.headers.get("content-type") || "").toLowerCase();
-    // ✅ avoid HTML pages masquerading as images
     if (!ct.startsWith("image/")) return null;
 
     const buf = Buffer.from(await res.arrayBuffer());
@@ -57,22 +56,24 @@ async function fetchAsDataUri(url) {
   }
 }
 
+async function readPublicFont(relFromPublic) {
+  const abs = path.join(process.cwd(), "public", relFromPublic);
+  return fs.readFile(abs);
+}
+
 export async function GET(req, { params }) {
   try {
     const url = new URL(req.url);
     const guildId = params?.guildId;
 
     // --------------------------
-    // Optional: load defaults from DB
-    // (fails open if DB is down / missing)
+    // Optional defaults from DB
     // --------------------------
     let dbDefaults = {};
     try {
       if (guildId) {
         await dbConnect();
         const settings = await GuildSettings.findOne({ guildId }).lean();
-
-        // adjust to your schema shape (defensive)
         const wc = settings?.welcomeCard || settings?.modules?.welcomeCard || null;
 
         if (wc && typeof wc === "object") {
@@ -80,8 +81,7 @@ export async function GET(req, { params }) {
             backgroundUrl: wc.backgroundUrl || wc.backgroundImageUrl || "",
             backgroundColor: wc.backgroundColor || "",
             textColor: wc.textColor || "",
-            overlayOpacity:
-              typeof wc.overlayOpacity === "number" ? String(wc.overlayOpacity) : "",
+            overlayOpacity: typeof wc.overlayOpacity === "number" ? String(wc.overlayOpacity) : "",
             title: wc.title || "",
             subtitle: wc.subtitle || "",
             showAvatar: typeof wc.showAvatar === "boolean" ? String(wc.showAvatar) : "",
@@ -93,7 +93,7 @@ export async function GET(req, { params }) {
     }
 
     // --------------------------
-    // Query params (query > DB defaults > hard defaults)
+    // Query params
     // --------------------------
     const backgroundImageUrl =
       qp(url, "backgroundUrl", "") ||
@@ -107,11 +107,7 @@ export async function GET(req, { params }) {
 
     const bgColor = qp(url, "backgroundColor", dbDefaults.backgroundColor || "#0b1020");
     const textColor = qp(url, "textColor", dbDefaults.textColor || "#ffffff");
-    const overlayOpacity = clamp(
-      qp(url, "overlayOpacity", dbDefaults.overlayOpacity || "0.35"),
-      0,
-      0.85
-    );
+    const overlayOpacity = clamp(qp(url, "overlayOpacity", dbDefaults.overlayOpacity || "0.35"), 0, 0.85);
 
     const showAvatar = qp(url, "showAvatar", dbDefaults.showAvatar || "true") !== "false";
 
@@ -122,17 +118,10 @@ export async function GET(req, { params }) {
     const avatarUrl = qp(url, "avatarUrl", "");
     const serverIconUrl = qp(url, "serverIconUrl", "");
 
-    // --- Canvas size ---
     const W = 1200;
     const H = 420;
 
-    // ✅ IMPORTANT:
-    // Step 4: DO NOT embed fonts in SVG.
-    // We rely on "Inter" being available via Fontconfig (FONTCONFIG_PATH) on the runtime.
-    const FONT_STACK =
-      "Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif";
-
-    // Images
+    // Load images
     const [bgData, avatarData, iconData] = await Promise.all([
       fetchAsDataUri(backgroundImageUrl),
       showAvatar ? fetchAsDataUri(avatarUrl) : Promise.resolve(null),
@@ -149,10 +138,6 @@ export async function GET(req, { params }) {
     const svg = `
 <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <style>
-      .t { font-family: ${JSON.stringify(FONT_STACK)}; }
-    </style>
-
     <linearGradient id="base" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="${bgColor}"/>
       <stop offset="100%" stop-color="#060814"/>
@@ -162,12 +147,8 @@ export async function GET(req, { params }) {
       <feDropShadow dx="0" dy="14" stdDeviation="14" flood-color="#000" flood-opacity="0.35"/>
     </filter>
 
-    <clipPath id="avatarClip">
-      <circle cx="172" cy="210" r="86"/>
-    </clipPath>
-    <clipPath id="iconClip">
-      <circle cx="1088" cy="92" r="38"/>
-    </clipPath>
+    <clipPath id="avatarClip"><circle cx="172" cy="210" r="86"/></clipPath>
+    <clipPath id="iconClip"><circle cx="1088" cy="92" r="38"/></clipPath>
   </defs>
 
   <rect x="0" y="0" width="${W}" height="${H}" rx="30" fill="url(#base)"/>
@@ -196,24 +177,45 @@ export async function GET(req, { params }) {
       : ""
   }
 
-  <text class="t" x="320" y="185" font-size="44" font-weight="800" fill="${textColor}">
+  <text x="320" y="185" font-size="44" font-weight="800" fill="${textColor}"
+    font-family="Inter">
     ${primaryLine}
   </text>
 
-  <text class="t" x="320" y="232" font-size="22" font-weight="600" fill="${textColor}" opacity="0.88">
+  <text x="320" y="232" font-size="22" font-weight="600" fill="${textColor}" opacity="0.88"
+    font-family="Inter">
     ${secondaryLine}
   </text>
 
-  <text class="t" x="${W - 84}" y="${H - 48}" text-anchor="end" font-size="16" font-weight="500"
-    fill="${textColor}" opacity="0.55">
+  <text x="${W - 84}" y="${H - 48}" text-anchor="end" font-size="16" font-weight="500"
+    fill="${textColor}" opacity="0.55" font-family="Inter">
     WoC • Welcome Card
   </text>
-</svg>
-`;
+</svg>`;
 
-    const png = await sharp(Buffer.from(svg), { density: 144 })
-      .png({ compressionLevel: 9 })
-      .toBuffer();
+    // ✅ Load font files from /public/fonts (no embedding in SVG)
+    const [interRegular, interBold] = await Promise.all([
+      readPublicFont("fonts/Inter-Regular.ttf"),
+      readPublicFont("fonts/Inter-ExtraBold.ttf"),
+    ]);
+
+    // ✅ Render using Resvg with custom fonts
+    const resvg = new Resvg(svg, {
+      fitTo: { mode: "width", value: W },
+      font: {
+        fontFiles: [
+          // order matters a bit, keep regular first
+          // resvg will pick weights automatically if it can
+          path.join(process.cwd(), "public", "fonts", "Inter-Regular.ttf"),
+          path.join(process.cwd(), "public", "fonts", "Inter-ExtraBold.ttf"),
+        ],
+        // fallback if font name mismatches
+        defaultFontFamily: "Inter",
+        loadSystemFonts: false,
+      },
+    });
+
+    const png = resvg.render().asPng();
 
     return new NextResponse(png, {
       headers: {
@@ -223,9 +225,6 @@ export async function GET(req, { params }) {
     });
   } catch (err) {
     console.error("[welcome-card] render error:", err);
-    return NextResponse.json(
-      { ok: false, error: String(err?.message || err) },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false, error: String(err?.message || err) }, { status: 500 });
   }
 }
