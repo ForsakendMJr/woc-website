@@ -1,8 +1,8 @@
 // app/api/guilds/[guildId]/welcome-card.png/route.js
 import { NextResponse } from "next/server";
-import sharp from "sharp";
 import fs from "fs/promises";
 import path from "path";
+import { createRequire } from "module";
 
 import dbConnect from "../../../../lib/mongodb";
 import GuildSettings from "../../../../models/GuildSettings";
@@ -36,27 +36,17 @@ function truncate(s, max = 48) {
 /* --------------------------- image / bg helpers --------------------------- */
 function sniffImageMime(buf) {
   if (!buf || buf.length < 12) return null;
-
   // PNG
-  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47)
-    return "image/png";
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "image/png";
   // JPEG
   if (buf[0] === 0xff && buf[1] === 0xd8) return "image/jpeg";
   // GIF
   if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return "image/gif";
   // WEBP ("RIFF"...."WEBP")
   if (
-    buf[0] === 0x52 &&
-    buf[1] === 0x49 &&
-    buf[2] === 0x46 &&
-    buf[3] === 0x46 &&
-    buf[8] === 0x57 &&
-    buf[9] === 0x45 &&
-    buf[10] === 0x42 &&
-    buf[11] === 0x50
-  )
-    return "image/webp";
-
+    buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
+    buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
+  ) return "image/webp";
   return null;
 }
 
@@ -64,7 +54,7 @@ function looksLikeHtmlResponse(contentType, buf) {
   const ct = (contentType || "").toLowerCase();
   if (ct.includes("text/html")) return true;
 
-  const head = buf.slice(0, 160).toString("utf8").toLowerCase();
+  const head = buf.slice(0, 200).toString("utf8").toLowerCase();
   return (
     head.includes("<!doctype html") ||
     head.includes("<html") ||
@@ -74,7 +64,9 @@ function looksLikeHtmlResponse(contentType, buf) {
 }
 
 async function fetchAsDataUriWithStatus(remoteUrl) {
-  if (!remoteUrl) return { dataUri: null, status: "none" }; // none | ok | blocked_html | fetch_failed
+  // returns: { dataUri, status }
+  // status: "none" | "ok" | "blocked_html" | "fetch_failed"
+  if (!remoteUrl) return { dataUri: null, status: "none" };
 
   try {
     const res = await fetch(remoteUrl, {
@@ -83,37 +75,33 @@ async function fetchAsDataUriWithStatus(remoteUrl) {
       headers: {
         "User-Agent": "Mozilla/5.0",
         Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-        // Some hosts behave differently without a referer
         Referer: remoteUrl,
       },
     });
 
-    if (!res.ok) {
-      return { dataUri: null, status: "fetch_failed", httpStatus: res.status };
-    }
+    if (!res.ok) return { dataUri: null, status: "fetch_failed" };
 
     const buf = Buffer.from(await res.arrayBuffer());
-    if (!buf.length) return { dataUri: null, status: "fetch_failed", httpStatus: 0 };
+    if (!buf.length) return { dataUri: null, status: "fetch_failed" };
 
     const ct = res.headers.get("content-type") || "";
 
-    // 🔥 Hotlink / HTML block detection (Freepik etc.)
+    // 🔥 Freepik-style “here’s HTML, good luck” detection
     if (looksLikeHtmlResponse(ct, buf)) {
-      return { dataUri: null, status: "blocked_html", httpStatus: res.status };
+      return { dataUri: null, status: "blocked_html" };
     }
 
     const declared = (ct || "").toLowerCase();
     const mime = declared.startsWith("image/") ? declared.split(";")[0] : sniffImageMime(buf);
-    if (!mime) return { dataUri: null, status: "fetch_failed", httpStatus: res.status };
+    if (!mime) return { dataUri: null, status: "fetch_failed" };
 
     return { dataUri: `data:${mime};base64,${buf.toString("base64")}`, status: "ok" };
   } catch {
-    return { dataUri: null, status: "fetch_failed", httpStatus: 0 };
+    return { dataUri: null, status: "fetch_failed" };
   }
 }
 
 async function localPublicAsDataUri(relPathFromPublic) {
-  // supports "/welcome-bg.jpg" OR "welcome-bg.jpg"
   const rel = String(relPathFromPublic || "").replace(/^\/+/, "");
   if (!rel) return null;
 
@@ -131,17 +119,14 @@ async function localPublicAsDataUri(relPathFromPublic) {
 
 /**
  * Auto-fit font size so title stays inside the bubble.
- * Rough but works well:
- * average character width ~= fontSize * 0.60 (Inter-ish)
+ * average glyph width ~= fontSize * 0.60 (Inter-ish)
  */
 function fitFontSize(text, maxWidthPx, baseSize, minSize) {
   const s = String(text || "");
   const len = Math.max(1, s.length);
   const avg = 0.60;
-
   const needed = maxWidthPx / (len * avg);
   const size = Math.floor(Math.min(baseSize, needed));
-
   return clamp(size, minSize, baseSize);
 }
 
@@ -151,14 +136,16 @@ export async function GET(req, { params }) {
     const guildId = params?.guildId;
     const metaMode = qp(url, "meta", "0") === "1";
 
+    // ✅ runtime require (avoids Turbopack bundling explosions)
+    const require = createRequire(import.meta.url);
+    const { Resvg } = require("@resvg/resvg-js");
+
     /* ----------------------- optional defaults from DB ---------------------- */
     let dbDefaults = {};
     try {
       if (guildId) {
         await dbConnect();
         const settings = await GuildSettings.findOne({ guildId }).lean();
-
-        // Supports either settings.welcomeCard OR settings.modules.welcomeCard
         const wc = settings?.welcomeCard || settings?.modules?.welcomeCard || null;
 
         if (wc && typeof wc === "object") {
@@ -166,8 +153,7 @@ export async function GET(req, { params }) {
             backgroundUrl: wc.backgroundUrl || wc.backgroundImageUrl || "",
             backgroundColor: wc.backgroundColor || "",
             textColor: wc.textColor || "",
-            overlayOpacity:
-              typeof wc.overlayOpacity === "number" ? String(wc.overlayOpacity) : "",
+            overlayOpacity: typeof wc.overlayOpacity === "number" ? String(wc.overlayOpacity) : "",
             title: wc.title || "",
             subtitle: wc.subtitle || "",
             showAvatar: typeof wc.showAvatar === "boolean" ? String(wc.showAvatar) : "",
@@ -191,11 +177,7 @@ export async function GET(req, { params }) {
 
     const bgColor = qp(url, "backgroundColor", dbDefaults.backgroundColor || "#0b1020");
     const textColor = qp(url, "textColor", dbDefaults.textColor || "#ffffff");
-    const overlayOpacity = clamp(
-      qp(url, "overlayOpacity", dbDefaults.overlayOpacity || "0.35"),
-      0,
-      0.85
-    );
+    const overlayOpacity = clamp(qp(url, "overlayOpacity", dbDefaults.overlayOpacity || "0.35"), 0, 0.85);
 
     const showAvatar = qp(url, "showAvatar", dbDefaults.showAvatar || "true") !== "false";
 
@@ -206,34 +188,33 @@ export async function GET(req, { params }) {
     const avatarUrl = qp(url, "avatarUrl", "");
     const serverIconUrl = qp(url, "serverIconUrl", "");
 
-    /* ------------------------------- canvas ------------------------------- */
     const W = 1200;
     const H = 420;
 
-    // Text substitutions
+    // Token replacements (allow longer text, we will shrink)
     const primaryLineText = truncate(
       titleRaw.replaceAll("{user.name}", username || "New member"),
-      120
+      140
     );
     const secondaryLineText = truncate(
       subtitleRaw
         .replaceAll("{membercount}", memberCount || "?")
         .replaceAll("{server.name}", serverName || "this server"),
-      120
+      140
     );
 
-    // Bubble geometry: text starts at x=320
+    // Bubble geometry: text starts at x=320; reserve safe padding on the right
     const textX = 320;
-    const rightSafe = 110; // keep away from edge + icon area
+    const rightSafe = 120;
     const maxTextWidth = W - textX - rightSafe;
 
-    // Auto-fit title + subtitle sizes
+    // ✅ auto-fit title + subtitle sizes
     const titleSize = fitFontSize(primaryLineText, maxTextWidth, 44, 22);
     const subtitleSize = fitFontSize(secondaryLineText, maxTextWidth, 22, 16);
 
-    /* -------------------------- background resolution -------------------------- */
+    // ✅ background: support local "/file.jpg" OR remote URL
     let bgData = null;
-    let bgStatus = "none"; // none | ok | blocked_html | fetch_failed
+    let bgStatus = "none";
 
     if (backgroundUrlRaw) {
       if (backgroundUrlRaw.startsWith("/")) {
@@ -246,22 +227,23 @@ export async function GET(req, { params }) {
       }
     }
 
-    // If meta=1, return JSON describing background status
+    // Optional: return background status as JSON for your UI to display a warning
     if (metaMode) {
       return NextResponse.json({
         ok: true,
         background: {
           input: backgroundUrlRaw || "",
-          status: bgStatus, // "ok" | "blocked_html" | "fetch_failed" | "none"
+          status: bgStatus, // ok | blocked_html | fetch_failed | none
         },
       });
     }
 
-    // Other images
-    const [avatarData, iconData] = await Promise.all([
-      showAvatar ? fetchAsDataUriWithStatus(avatarUrl).then((r) => r.dataUri) : Promise.resolve(null),
-      fetchAsDataUriWithStatus(serverIconUrl).then((r) => r.dataUri),
+    const [avatarRes, iconRes] = await Promise.all([
+      showAvatar ? fetchAsDataUriWithStatus(avatarUrl) : Promise.resolve({ dataUri: null, status: "none" }),
+      fetchAsDataUriWithStatus(serverIconUrl),
     ]);
+    const avatarData = avatarRes.dataUri;
+    const iconData = iconRes.dataUri;
 
     const primaryLine = esc(primaryLineText);
     const secondaryLine = esc(secondaryLineText);
@@ -292,58 +274,63 @@ export async function GET(req, { params }) {
   ${
     avatarData
       ? `
-  <circle cx="172" cy="210" r="96" fill="rgba(255,255,255,0.10)"/>
-  <circle cx="172" cy="210" r="92" fill="rgba(0,0,0,0.20)"/>
-  <image href="${avatarData}" x="86" y="124" width="172" height="172" clip-path="url(#avatarClip)"/>
-`
+      <circle cx="172" cy="210" r="96" fill="rgba(255,255,255,0.10)"/>
+      <circle cx="172" cy="210" r="92" fill="rgba(0,0,0,0.20)"/>
+      <image href="${avatarData}" x="86" y="124" width="172" height="172" clip-path="url(#avatarClip)"/>
+    `
       : `<circle cx="172" cy="210" r="86" fill="rgba(255,255,255,0.12)"/>`
   }
 
   ${
     iconData
       ? `
-  <circle cx="1088" cy="92" r="44" fill="rgba(255,255,255,0.10)"/>
-  <image href="${iconData}" x="1050" y="54" width="76" height="76" clip-path="url(#iconClip)"/>
-`
+      <circle cx="1088" cy="92" r="44" fill="rgba(255,255,255,0.10)"/>
+      <image href="${iconData}" x="1050" y="54" width="76" height="76" clip-path="url(#iconClip)"/>
+    `
       : ""
   }
 
-  <text x="${textX}" y="185" font-size="${titleSize}" font-weight="800"
-    font-family="Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif"
-    fill="${textColor}">
+  <text x="${textX}" y="185" font-size="${titleSize}" font-weight="800" fill="${textColor}"
+    font-family="Inter">
     ${primaryLine}
   </text>
 
-  <text x="${textX}" y="232" font-size="${subtitleSize}" font-weight="600"
-    font-family="Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif"
-    fill="${textColor}" opacity="0.88">
+  <text x="${textX}" y="232" font-size="${subtitleSize}" font-weight="600" fill="${textColor}" opacity="0.88"
+    font-family="Inter">
     ${secondaryLine}
   </text>
 
   <text x="${W - 84}" y="${H - 48}" text-anchor="end" font-size="16" font-weight="500"
-    font-family="Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif"
-    fill="${textColor}" opacity="0.55">
+    fill="${textColor}" opacity="0.55" font-family="Inter">
     WoC • Welcome Card
   </text>
-</svg>
-`;
+</svg>`.trim();
 
-    const png = await sharp(Buffer.from(svg), { density: 144 })
-      .png({ compressionLevel: 9 })
-      .toBuffer();
+    // ✅ Resvg: load your font files (THIS is why the “old code” had real text)
+    const resvg = new Resvg(svg, {
+      fitTo: { mode: "width", value: W },
+      font: {
+        fontFiles: [
+          path.join(process.cwd(), "public", "fonts", "Inter-Regular.ttf"),
+          path.join(process.cwd(), "public", "fonts", "Inter-ExtraBold.ttf"),
+        ],
+        defaultFontFamily: "Inter",
+        loadSystemFonts: false,
+      },
+    });
+
+    const png = resvg.render().asPng();
 
     return new NextResponse(png, {
       headers: {
         "Content-Type": "image/png",
         "Cache-Control": "no-store",
-        "X-WoC-Background-Status": bgStatus,
+        // ✅ UI can read this (and show warning text)
+        "X-WoC-Background-Status": bgStatus, // ok | blocked_html | fetch_failed | none
       },
     });
   } catch (err) {
     console.error("[welcome-card] render error:", err);
-    return NextResponse.json(
-      { ok: false, error: String(err?.message || err) },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false, error: String(err?.message || err) }, { status: 500 });
   }
 }
