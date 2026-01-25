@@ -2415,9 +2415,35 @@ export default function DashboardPage() {
     </div>
   </div>
 
-  {/* Helper: verify the route really returns an image */}
   {(() => {
     const previewSrc = welcomeCardPreviewUrl || "";
+
+    // Hide noisy/sensitive params in the displayed "Endpoint"
+    function sanitizePreviewUrl(u) {
+      try {
+        if (!u) return "";
+        const x = new URL(u, typeof window !== "undefined" ? window.location.origin : "http://localhost");
+        const hideKeys = new Set([
+          "backgroundUrl",
+          "backgroundImageUrl",
+          "avatarUrl",
+          "serverIconUrl",
+          "_",
+        ]);
+
+        for (const k of Array.from(x.searchParams.keys())) {
+          if (hideKeys.has(k)) x.searchParams.set(k, "…");
+        }
+
+        // Also clamp title/subtitle so the endpoint display stays tidy
+        if (x.searchParams.get("title")?.length > 60) x.searchParams.set("title", x.searchParams.get("title").slice(0, 60) + "…");
+        if (x.searchParams.get("subtitle")?.length > 60) x.searchParams.set("subtitle", x.searchParams.get("subtitle").slice(0, 60) + "…");
+
+        return x.pathname + "?" + x.searchParams.toString();
+      } catch {
+        return u;
+      }
+    }
 
     async function verifyPng(url) {
       if (!url) return { ok: false, reason: "No preview URL." };
@@ -2426,10 +2452,31 @@ export default function DashboardPage() {
         const res = await fetch(url, { cache: "no-store" });
         const ct = (res.headers.get("content-type") || "").toLowerCase();
 
-        // If it isn't an image, capture a short snippet for debugging.
+        // If it isn't an image, read JSON/text for a useful error message
         if (!ct.includes("image/")) {
-          const txt = await res.text().catch(() => "");
-          const snippet = txt ? ` Snippet: ${txt.slice(0, 180)}${txt.length > 180 ? "…" : ""}` : "";
+          const raw = await res.text().catch(() => "");
+          let msg = raw;
+
+          // Try parse JSON { ok:false, error:"..." }
+          try {
+            const j = JSON.parse(raw);
+            if (j?.error) msg = String(j.error);
+          } catch {}
+
+          // Special friendly warning
+          if (String(msg).toLowerCase().includes("background blocked by host")) {
+            return {
+              ok: false,
+              reason:
+                "Background blocked by host (the site returned HTML or denied hotlinking). Try a different image URL or upload the image into your own /public folder.",
+            };
+          }
+
+          const snippet =
+            msg && msg.length > 0
+              ? ` Snippet: ${msg.slice(0, 180)}${msg.length > 180 ? "…" : ""}`
+              : "";
+
           return {
             ok: false,
             reason: `Preview route returned non-image. Status ${res.status}. content-type: ${ct || "(none)"}.${
@@ -2438,7 +2485,6 @@ export default function DashboardPage() {
           };
         }
 
-        // If it is an image but not OK, still error
         if (!res.ok) {
           return {
             ok: false,
@@ -2446,21 +2492,21 @@ export default function DashboardPage() {
           };
         }
 
-        // Optional: read bytes to ensure something exists (prevents “empty body” edge cases)
         const buf = await res.arrayBuffer().catch(() => null);
         if (!buf || buf.byteLength < 20) {
           return {
             ok: false,
-            reason: `Preview route returned image/png but response body looks empty (${buf?.byteLength ?? 0} bytes).`,
+            reason: `Preview route returned image but response body looks empty (${buf?.byteLength ?? 0} bytes).`,
           };
         }
 
-        // Great: the route is returning an image.
         return { ok: true, reason: `OK (status ${res.status}, ${ct}, ${buf.byteLength} bytes)` };
       } catch (e) {
         return { ok: false, reason: `Fetch failed: ${String(e?.message || e)}` };
       }
     }
+
+    const endpointDisplay = sanitizePreviewUrl(previewSrc);
 
     return (
       <>
@@ -2485,17 +2531,13 @@ export default function DashboardPage() {
             className="w-full h-auto"
             onLoad={() => setWelcomePreviewError("")}
             onError={async () => {
-              // ✅ Don’t instantly scream “broken”. Verify first.
               const check = await verifyPng(previewSrc);
 
               if (check.ok) {
-                // Browser couldn't decode, but the route returned a real image.
-                // Treat as a soft warning instead of a red “route is broken”.
                 setWelcomePreviewError(
                   `PNG returned, but the browser couldn’t decode it this time. ${check.reason}. Try Refresh.`
                 );
               } else {
-                // Real failure (non-image, 401/500, HTML, etc.)
                 setWelcomePreviewError(check.reason);
               }
             }}
@@ -2505,13 +2547,14 @@ export default function DashboardPage() {
         <div className="mt-3 text-[0.72rem] text-[var(--text-muted)] break-all">
           Endpoint:{" "}
           <span className="font-semibold text-[var(--text-main)]">
-            {previewSrc || "(not ready)"}
+            {endpointDisplay || "(not ready)"}
           </span>
         </div>
       </>
     );
   })()}
 </div>
+
 
 
                                 {/* ✅ Auto role ID (was below your preview before) */}

@@ -10,7 +10,6 @@ import GuildSettings from "../../../../models/GuildSettings";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/* ----------------------------- tiny utilities ----------------------------- */
 function qp(url, key, fallback = "") {
   const v = url.searchParams.get(key);
   return v == null || v === "" ? fallback : v;
@@ -33,16 +32,11 @@ function truncate(s, max = 48) {
   return s.length <= max ? s : s.slice(0, Math.max(0, max - 1)) + "…";
 }
 
-/* --------------------------- image / bg helpers --------------------------- */
 function sniffImageMime(buf) {
   if (!buf || buf.length < 12) return null;
-  // PNG
   if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "image/png";
-  // JPEG
   if (buf[0] === 0xff && buf[1] === 0xd8) return "image/jpeg";
-  // GIF
   if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return "image/gif";
-  // WEBP ("RIFF"...."WEBP")
   if (
     buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
     buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
@@ -64,8 +58,6 @@ function looksLikeHtmlResponse(contentType, buf) {
 }
 
 async function fetchAsDataUriWithStatus(remoteUrl) {
-  // returns: { dataUri, status }
-  // status: "none" | "ok" | "blocked_html" | "fetch_failed"
   if (!remoteUrl) return { dataUri: null, status: "none" };
 
   try {
@@ -86,7 +78,6 @@ async function fetchAsDataUriWithStatus(remoteUrl) {
 
     const ct = res.headers.get("content-type") || "";
 
-    // 🔥 Freepik-style “here’s HTML, good luck” detection
     if (looksLikeHtmlResponse(ct, buf)) {
       return { dataUri: null, status: "blocked_html" };
     }
@@ -117,10 +108,6 @@ async function localPublicAsDataUri(relPathFromPublic) {
   }
 }
 
-/**
- * Auto-fit font size so title stays inside the bubble.
- * average glyph width ~= fontSize * 0.60 (Inter-ish)
- */
 function fitFontSize(text, maxWidthPx, baseSize, minSize) {
   const s = String(text || "");
   const len = Math.max(1, s.length);
@@ -136,11 +123,9 @@ export async function GET(req, { params }) {
     const guildId = params?.guildId;
     const metaMode = qp(url, "meta", "0") === "1";
 
-    // ✅ runtime require (avoids Turbopack bundling explosions)
     const require = createRequire(import.meta.url);
     const { Resvg } = require("@resvg/resvg-js");
 
-    /* ----------------------- optional defaults from DB ---------------------- */
     let dbDefaults = {};
     try {
       if (guildId) {
@@ -164,13 +149,36 @@ export async function GET(req, { params }) {
       console.warn("[welcome-card] settings lookup failed:", e?.message || e);
     }
 
-    /* ---------------- query params (query > db > defaults) ---------------- */
     const backgroundUrlRaw =
       qp(url, "backgroundUrl", "") ||
       qp(url, "backgroundImageUrl", "") ||
       qp(url, "background", "") ||
       dbDefaults.backgroundUrl ||
       "";
+
+    // Do background check first so meta mode can return fast
+    let bgData = null;
+    let bgStatus = "none";
+    if (backgroundUrlRaw) {
+      if (backgroundUrlRaw.startsWith("/")) {
+        bgData = await localPublicAsDataUri(backgroundUrlRaw);
+        bgStatus = bgData ? "ok" : "fetch_failed";
+      } else {
+        const bgRes = await fetchAsDataUriWithStatus(backgroundUrlRaw);
+        bgData = bgRes.dataUri;
+        bgStatus = bgRes.status;
+      }
+    }
+
+    if (metaMode) {
+      return NextResponse.json({
+        ok: true,
+        background: {
+          input: backgroundUrlRaw || "",
+          status: bgStatus, // ok | blocked_html | fetch_failed | none
+        },
+      });
+    }
 
     const titleRaw = qp(url, "title", dbDefaults.title || "Welcome!");
     const subtitleRaw = qp(url, "subtitle", dbDefaults.subtitle || "");
@@ -191,7 +199,6 @@ export async function GET(req, { params }) {
     const W = 1200;
     const H = 420;
 
-    // Token replacements (allow longer text, we will shrink)
     const primaryLineText = truncate(
       titleRaw.replaceAll("{user.name}", username || "New member"),
       140
@@ -203,45 +210,18 @@ export async function GET(req, { params }) {
       140
     );
 
-    // Bubble geometry: text starts at x=320; reserve safe padding on the right
     const textX = 320;
     const rightSafe = 120;
     const maxTextWidth = W - textX - rightSafe;
 
-    // ✅ auto-fit title + subtitle sizes
     const titleSize = fitFontSize(primaryLineText, maxTextWidth, 44, 22);
     const subtitleSize = fitFontSize(secondaryLineText, maxTextWidth, 22, 16);
-
-    // ✅ background: support local "/file.jpg" OR remote URL
-    let bgData = null;
-    let bgStatus = "none";
-
-    if (backgroundUrlRaw) {
-      if (backgroundUrlRaw.startsWith("/")) {
-        bgData = await localPublicAsDataUri(backgroundUrlRaw);
-        bgStatus = bgData ? "ok" : "fetch_failed";
-      } else {
-        const bgRes = await fetchAsDataUriWithStatus(backgroundUrlRaw);
-        bgData = bgRes.dataUri;
-        bgStatus = bgRes.status;
-      }
-    }
-
-    // Optional: return background status as JSON for your UI to display a warning
-    if (metaMode) {
-      return NextResponse.json({
-        ok: true,
-        background: {
-          input: backgroundUrlRaw || "",
-          status: bgStatus, // ok | blocked_html | fetch_failed | none
-        },
-      });
-    }
 
     const [avatarRes, iconRes] = await Promise.all([
       showAvatar ? fetchAsDataUriWithStatus(avatarUrl) : Promise.resolve({ dataUri: null, status: "none" }),
       fetchAsDataUriWithStatus(serverIconUrl),
     ]);
+
     const avatarData = avatarRes.dataUri;
     const iconData = iconRes.dataUri;
 
@@ -290,13 +270,11 @@ export async function GET(req, { params }) {
       : ""
   }
 
-  <text x="${textX}" y="185" font-size="${titleSize}" font-weight="800" fill="${textColor}"
-    font-family="Inter">
+  <text x="${textX}" y="185" font-size="${titleSize}" font-weight="800" fill="${textColor}" font-family="Inter">
     ${primaryLine}
   </text>
 
-  <text x="${textX}" y="232" font-size="${subtitleSize}" font-weight="600" fill="${textColor}" opacity="0.88"
-    font-family="Inter">
+  <text x="${textX}" y="232" font-size="${subtitleSize}" font-weight="600" fill="${textColor}" opacity="0.88" font-family="Inter">
     ${secondaryLine}
   </text>
 
@@ -306,7 +284,6 @@ export async function GET(req, { params }) {
   </text>
 </svg>`.trim();
 
-    // ✅ Resvg: load your font files (THIS is why the “old code” had real text)
     const resvg = new Resvg(svg, {
       fitTo: { mode: "width", value: W },
       font: {
@@ -325,8 +302,7 @@ export async function GET(req, { params }) {
       headers: {
         "Content-Type": "image/png",
         "Cache-Control": "no-store",
-        // ✅ UI can read this (and show warning text)
-        "X-WoC-Background-Status": bgStatus, // ok | blocked_html | fetch_failed | none
+        "X-WoC-Background-Status": bgStatus,
       },
     });
   } catch (err) {
