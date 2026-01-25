@@ -1,19 +1,23 @@
+// src/app/api/guilds/[guildId]/welcome-card.png/route.js
 import { NextResponse } from "next/server";
 import sharp from "sharp";
 import fs from "fs/promises";
+import path from "path";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+export const runtime = "nodejs";          // canvas/sharp needs node runtime
+export const dynamic = "force-dynamic";   // no caching while debugging
 
 function qp(url, key, fallback = "") {
   const v = url.searchParams.get(key);
   return v == null || v === "" ? fallback : v;
 }
+
 function clamp(n, min, max) {
   n = Number(n);
   if (Number.isNaN(n)) return min;
   return Math.max(min, Math.min(max, n));
 }
+
 function esc(s) {
   return String(s ?? "")
     .replaceAll("&", "&amp;")
@@ -22,38 +26,65 @@ function esc(s) {
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 }
+
 function truncate(s, max = 48) {
   s = String(s || "");
   return s.length <= max ? s : s.slice(0, Math.max(0, max - 1)) + "…";
 }
 
-async function fetchAsDataUri(url) {
-  if (!url) return null;
+async function readPublicFontBase64(fileName) {
   try {
-    const res = await fetch(url, {
-      cache: "no-store",
-      redirect: "follow",
-      headers: {
-        // Some CDNs block "unknown" fetches. This helps.
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-      },
-    });
-    if (!res.ok) return null;
-
-    const ct = res.headers.get("content-type") || "image/png";
-    const buf = Buffer.from(await res.arrayBuffer());
-    return `data:${ct};base64,${buf.toString("base64")}`;
+    const abs = path.join(process.cwd(), "public", "fonts", fileName);
+    const buf = await fs.readFile(abs);
+    return buf.toString("base64");
   } catch {
     return null;
   }
 }
 
-async function readFontBase64(relPath) {
+async function fetchAsDataUri(url) {
+  if (!url) return null;
+
+  // prevent silly huge requests
+  const MAX_BYTES = 8 * 1024 * 1024; // 8MB
+
   try {
-    const abs = new URL(relPath, import.meta.url);
-    const buf = await fs.readFile(abs);
-    return buf.toString("base64");
+    const res = await fetch(url, {
+      cache: "no-store",
+      redirect: "follow",
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        // some CDNs require referer-like behavior
+        "Referer": url,
+      },
+    });
+
+    if (!res.ok) {
+      // Helpful for debugging in logs (you can remove later)
+      console.log("[welcome-card] fetch blocked:", res.status, url);
+      return null;
+    }
+
+    const ct = (res.headers.get("content-type") || "").toLowerCase();
+    if (!ct.includes("image/")) return null;
+
+    const ab = await res.arrayBuffer();
+    if (ab.byteLength > MAX_BYTES) return null;
+
+    const buf = Buffer.from(ab);
+    return `data:${ct || "image/png"};base64,${buf.toString("base64")}`;
+  } catch {
+    return null;
+  }
+}
+
+async function localPublicImageDataUri(origin, publicPath) {
+  // Fetch from our own server so it works on Vercel too
+  // Example: /backgrounds/welcome.jpg
+  try {
+    const url = `${origin}${publicPath.startsWith("/") ? publicPath : `/${publicPath}`}`;
+    return await fetchAsDataUri(url);
   } catch {
     return null;
   }
@@ -63,7 +94,7 @@ export async function GET(req) {
   try {
     const url = new URL(req.url);
 
-    // ✅ Support ALL the param names your UI has used
+    // Support your UI param names
     const backgroundImageUrl =
       qp(url, "backgroundUrl", "") ||
       qp(url, "backgroundImageUrl", "") ||
@@ -85,42 +116,48 @@ export async function GET(req) {
     const avatarUrl = qp(url, "avatarUrl", "");
     const serverIconUrl = qp(url, "serverIconUrl", "");
 
-    // --- Canvas size ---
+    // Canvas
     const W = 1200;
     const H = 420;
 
-    // --- Load font files and embed them (fixes □□□ forever) ---
-    const interRegular = await readFontBase64("../../../../../../assets/fonts/Inter-Regular.ttf");
-    const interBold = await readFontBase64("../../../../../../assets/fonts/Inter-ExtraBold.ttf");
+    // ✅ Reliable font loading from /public/fonts
+    const interRegular = await readPublicFontBase64("Inter-Regular.ttf");
+    const interBold = await readPublicFontBase64("Inter-ExtraBold.ttf");
 
-    // If you only add Regular, we still proceed
     const fontCss = interRegular
       ? `
-      @font-face {
-        font-family: "InterEmbed";
-        src: url("data:font/ttf;base64,${interRegular}") format("truetype");
-        font-weight: 400;
-        font-style: normal;
-      }
-      ${interBold ? `
-      @font-face {
-        font-family: "InterEmbed";
-        src: url("data:font/ttf;base64,${interBold}") format("truetype");
-        font-weight: 800;
-        font-style: normal;
-      }` : ""}
-    `
+        @font-face {
+          font-family: "InterEmbed";
+          src: url("data:font/ttf;base64,${interRegular}") format("truetype");
+          font-weight: 400;
+          font-style: normal;
+        }
+        ${interBold ? `
+        @font-face {
+          font-family: "InterEmbed";
+          src: url("data:font/ttf;base64,${interBold}") format("truetype");
+          font-weight: 800;
+          font-style: normal;
+        }` : ""}
+      `
       : `
-      /* fallback if font file missing */
-      .t { font-family: Arial, sans-serif; }
-    `;
+        /* fallback if fonts missing */
+        .t { font-family: Arial, sans-serif; }
+      `;
 
-    // --- Fetch images ---
-    const [bgData, avatarData, iconData] = await Promise.all([
+    // ✅ Background:
+    // 1) try user backgroundUrl
+    // 2) fallback to /public/backgrounds/welcome.jpg
+    const origin = url.origin;
+
+    const [bgDataExternal, bgDataFallback, avatarData, iconData] = await Promise.all([
       fetchAsDataUri(backgroundImageUrl),
+      localPublicImageDataUri(origin, "/backgrounds/welcome.jpg"),
       showAvatar ? fetchAsDataUri(avatarUrl) : Promise.resolve(null),
       fetchAsDataUri(serverIconUrl),
     ]);
+
+    const bgData = bgDataExternal || bgDataFallback || null;
 
     const primaryLine = esc(title.replaceAll("{user.name}", username || "New member"));
     const secondaryLine = esc(
@@ -156,11 +193,7 @@ export async function GET(req) {
 
         <rect x="0" y="0" width="${W}" height="${H}" rx="30" fill="url(#base)"/>
 
-        ${
-          bgData
-            ? `<image href="${bgData}" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="xMidYMid slice"/>`
-            : ""
-        }
+        ${bgData ? `<image href="${bgData}" x="0" y="0" width="${W}" height="${H}" preserveAspectRatio="xMidYMid slice"/>` : ""}
 
         <rect x="0" y="0" width="${W}" height="${H}" rx="30" fill="rgba(0,0,0,${overlayOpacity})"/>
 
@@ -204,10 +237,16 @@ export async function GET(req) {
     const png = await sharp(Buffer.from(svg)).png({ compressionLevel: 9 }).toBuffer();
 
     return new NextResponse(png, {
-      headers: { "Content-Type": "image/png", "Cache-Control": "no-store" },
+      headers: {
+        "Content-Type": "image/png",
+        "Cache-Control": "no-store",
+      },
     });
   } catch (err) {
     console.error("[welcome-card] render error:", err);
-    return NextResponse.json({ ok: false, error: String(err?.message || err) }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: String(err?.message || err) },
+      { status: 500 }
+    );
   }
 }
