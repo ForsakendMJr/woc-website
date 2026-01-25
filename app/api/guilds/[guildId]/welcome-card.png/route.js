@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import sharp from "sharp";
 import fs from "fs/promises";
 import path from "path";
+import { createRequire } from "module";
 
 import dbConnect from "../../../../lib/mongodb";
 import GuildSettings from "../../../../models/GuildSettings";
@@ -34,19 +34,13 @@ function truncate(s, max = 48) {
 
 function sniffImageMime(buf) {
   if (!buf || buf.length < 12) return null;
-
-  // PNG
-  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "image/png";
-  // JPEG
-  if (buf[0] === 0xff && buf[1] === 0xd8) return "image/jpeg";
-  // GIF
-  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return "image/gif";
-  // WEBP ("RIFF"...."WEBP")
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return "image/png"; // PNG
+  if (buf[0] === 0xff && buf[1] === 0xd8) return "image/jpeg"; // JPEG
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return "image/gif"; // GIF
   if (
     buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
     buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
-  ) return "image/webp";
-
+  ) return "image/webp"; // WEBP
   return null;
 }
 
@@ -60,7 +54,6 @@ async function fetchAsDataUri(remoteUrl) {
       headers: {
         "User-Agent": "Mozilla/5.0",
         Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-        // Some CDNs behave differently if no Referer; harmless if ignored
         Referer: remoteUrl,
       },
     });
@@ -71,16 +64,12 @@ async function fetchAsDataUri(remoteUrl) {
     if (!buf.length) return null;
 
     const ct = (res.headers.get("content-type") || "").toLowerCase();
-
-    // If server lies / omits content-type, sniff bytes
     const sniffed = sniffImageMime(buf);
 
-    // Reject obvious HTML pages masquerading as images
-    // (Freepik often sends HTML unless you’re “allowed”)
+    // Reject HTML pretending to be an image (Freepik often does this)
+    const head = buf.slice(0, 80).toString("utf8").toLowerCase();
     const looksLikeHtml =
-      ct.includes("text/html") ||
-      (buf.slice(0, 40).toString("utf8").toLowerCase().includes("<!doctype html") ||
-        buf.slice(0, 20).toString("utf8").toLowerCase().includes("<html"));
+      ct.includes("text/html") || head.includes("<!doctype html") || head.includes("<html");
 
     if (looksLikeHtml) return null;
 
@@ -94,7 +83,6 @@ async function fetchAsDataUri(remoteUrl) {
 }
 
 async function localPublicAsDataUri(relPathFromPublic) {
-  // supports "/welcome-bg.jpg" OR "welcome-bg.jpg"
   const rel = String(relPathFromPublic || "").replace(/^\/+/, "");
   if (!rel) return null;
 
@@ -111,17 +99,14 @@ async function localPublicAsDataUri(relPathFromPublic) {
 }
 
 /**
- * Auto-fit font size so title stays inside bubble
- * Rough math (fast + works well enough):
- * - average character width ~= fontSize * 0.60 (Inter-ish)
+ * Auto-fit font size so title stays inside bubble.
+ * - avg glyph width ~= fontSize * 0.60 (Inter-ish)
  */
 function fitFontSize(text, maxWidthPx, baseSize, minSize) {
   const s = String(text || "");
   const len = Math.max(1, s.length);
-
-  const avg = 0.60; // average glyph width factor
+  const avg = 0.60;
   const needed = maxWidthPx / (len * avg);
-
   const size = Math.floor(Math.min(baseSize, needed));
   return clamp(size, minSize, baseSize);
 }
@@ -130,6 +115,10 @@ export async function GET(req, { params }) {
   try {
     const url = new URL(req.url);
     const guildId = params?.guildId;
+
+    // ✅ runtime require (helps avoid bundling issues)
+    const require = createRequire(import.meta.url);
+    const { Resvg } = require("@resvg/resvg-js");
 
     /* ----------------------- optional defaults from DB ---------------------- */
     let dbDefaults = {};
@@ -144,8 +133,7 @@ export async function GET(req, { params }) {
             backgroundUrl: wc.backgroundUrl || wc.backgroundImageUrl || "",
             backgroundColor: wc.backgroundColor || "",
             textColor: wc.textColor || "",
-            overlayOpacity:
-              typeof wc.overlayOpacity === "number" ? String(wc.overlayOpacity) : "",
+            overlayOpacity: typeof wc.overlayOpacity === "number" ? String(wc.overlayOpacity) : "",
             title: wc.title || "",
             subtitle: wc.subtitle || "",
             showAvatar: typeof wc.showAvatar === "boolean" ? String(wc.showAvatar) : "",
@@ -180,40 +168,34 @@ export async function GET(req, { params }) {
     const avatarUrl = qp(url, "avatarUrl", "");
     const serverIconUrl = qp(url, "serverIconUrl", "");
 
-    // --- Canvas size ---
     const W = 1200;
     const H = 420;
 
-    // Text rendering replacements
+    // Replace tokens and allow longer than before (we’ll shrink instead)
     const primaryLineText = truncate(
       titleRaw.replaceAll("{user.name}", username || "New member"),
-      90
+      120
     );
     const secondaryLineText = truncate(
       subtitleRaw
         .replaceAll("{membercount}", memberCount || "?")
         .replaceAll("{server.name}", serverName || "this server"),
-      90
+      120
     );
 
-    // Bubble geometry (your text starts at x=320; keep safe right padding)
+    // Bubble geometry: text starts x=320; keep right padding away from edge/icon
     const textX = 320;
-    const rightSafe = 110; // space away from edge / server icon area
+    const rightSafe = 120;
     const maxTextWidth = W - textX - rightSafe;
 
-    // ✅ Auto-fit title size
+    // ✅ Auto-fit title/subtitle sizes
     const titleSize = fitFontSize(primaryLineText, maxTextWidth, 44, 22);
-
-    // Subtitle can also be fitted lightly (optional)
     const subtitleSize = fitFontSize(secondaryLineText, maxTextWidth, 22, 16);
 
-    // ✅ Background: support local files (/welcome-bg.jpg) + remote URLs
+    // ✅ Background: local (/something.jpg) OR remote (only if real image)
     let bgData = null;
-    if (backgroundUrlRaw.startsWith("/")) {
-      bgData = await localPublicAsDataUri(backgroundUrlRaw);
-    } else {
-      bgData = await fetchAsDataUri(backgroundUrlRaw);
-    }
+    if (backgroundUrlRaw.startsWith("/")) bgData = await localPublicAsDataUri(backgroundUrlRaw);
+    else bgData = await fetchAsDataUri(backgroundUrlRaw);
 
     const [avatarData, iconData] = await Promise.all([
       showAvatar ? fetchAsDataUri(avatarUrl) : Promise.resolve(null),
@@ -235,12 +217,8 @@ export async function GET(req, { params }) {
       <feDropShadow dx="0" dy="14" stdDeviation="14" flood-color="#000" flood-opacity="0.35"/>
     </filter>
 
-    <clipPath id="avatarClip">
-      <circle cx="172" cy="210" r="86"/>
-    </clipPath>
-    <clipPath id="iconClip">
-      <circle cx="1088" cy="92" r="38"/>
-    </clipPath>
+    <clipPath id="avatarClip"><circle cx="172" cy="210" r="86"/></clipPath>
+    <clipPath id="iconClip"><circle cx="1088" cy="92" r="38"/></clipPath>
   </defs>
 
   <rect x="0" y="0" width="${W}" height="${H}" rx="30" fill="url(#base)"/>
@@ -253,48 +231,52 @@ export async function GET(req, { params }) {
   ${
     avatarData
       ? `
-    <circle cx="172" cy="210" r="96" fill="rgba(255,255,255,0.10)"/>
-    <circle cx="172" cy="210" r="92" fill="rgba(0,0,0,0.20)"/>
-    <image href="${avatarData}" x="86" y="124" width="172" height="172" clip-path="url(#avatarClip)"/>
-  `
+      <circle cx="172" cy="210" r="96" fill="rgba(255,255,255,0.10)"/>
+      <circle cx="172" cy="210" r="92" fill="rgba(0,0,0,0.20)"/>
+      <image href="${avatarData}" x="86" y="124" width="172" height="172" clip-path="url(#avatarClip)"/>
+    `
       : `<circle cx="172" cy="210" r="86" fill="rgba(255,255,255,0.12)"/>`
   }
 
   ${
     iconData
       ? `
-    <circle cx="1088" cy="92" r="44" fill="rgba(255,255,255,0.10)"/>
-    <image href="${iconData}" x="1050" y="54" width="76" height="76" clip-path="url(#iconClip)"/>
-  `
+      <circle cx="1088" cy="92" r="44" fill="rgba(255,255,255,0.10)"/>
+      <image href="${iconData}" x="1050" y="54" width="76" height="76" clip-path="url(#iconClip)"/>
+    `
       : ""
   }
 
-  <!-- ✅ Use system font fallback; Resvg handles this better than SVG embedded fonts -->
-  <text x="${textX}" y="185" font-size="${titleSize}" font-weight="800"
-    font-family="DejaVu Sans, Arial, sans-serif"
-    fill="${textColor}">
+  <text x="${textX}" y="185" font-size="${titleSize}" font-weight="800" fill="${textColor}"
+    font-family="Inter">
     ${primaryLine}
   </text>
 
-  <text x="${textX}" y="232" font-size="${subtitleSize}" font-weight="600"
-    font-family="DejaVu Sans, Arial, sans-serif"
-    fill="${textColor}" opacity="0.88">
+  <text x="${textX}" y="232" font-size="${subtitleSize}" font-weight="600" fill="${textColor}" opacity="0.88"
+    font-family="Inter">
     ${secondaryLine}
   </text>
 
-  <text x="${W - 84}" y="${H - 48}" text-anchor="end" font-size="16"
-    font-family="DejaVu Sans, Arial, sans-serif"
-    fill="${textColor}" opacity="0.55">
+  <text x="${W - 84}" y="${H - 48}" text-anchor="end" font-size="16" font-weight="500"
+    fill="${textColor}" opacity="0.55" font-family="Inter">
     WoC • Welcome Card
   </text>
+</svg>`;
 
-</svg>
-`;
+    // ✅ Resvg gets told where the font files are
+    const resvg = new Resvg(svg, {
+      fitTo: { mode: "width", value: W },
+      font: {
+        fontFiles: [
+          path.join(process.cwd(), "public", "fonts", "Inter-Regular.ttf"),
+          path.join(process.cwd(), "public", "fonts", "Inter-ExtraBold.ttf"),
+        ],
+        defaultFontFamily: "Inter",
+        loadSystemFonts: false,
+      },
+    });
 
-    // Render with sharp (SVG -> PNG)
-    const png = await sharp(Buffer.from(svg), { density: 144 })
-      .png({ compressionLevel: 9 })
-      .toBuffer();
+    const png = resvg.render().asPng();
 
     return new NextResponse(png, {
       headers: { "Content-Type": "image/png", "Cache-Control": "no-store" },
