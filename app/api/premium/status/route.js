@@ -5,7 +5,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "../../auth/[...nextauth]/route";
 
 import dbConnect from "../../../../lib/mongodb";
-import PremiumUser, { TIER_ORDER } from "../../../../models/PremiumUser";
+import PremiumUser, { TIER_ORDER } from "../../../models/PremiumUser";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

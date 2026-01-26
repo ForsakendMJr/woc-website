@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import dbConnect from "../../../../lib/mongodb";
-import PremiumUser from "../../../../models/PremiumUser";
+import PremiumUser from "../../../models/PremiumUser";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
