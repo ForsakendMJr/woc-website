@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 
 // IMPORTANT: fix this import to YOUR actual authOptions export.
-import { authOptions } from "../../auth/[...nextauth]/route";
+import { authOptions } from "../../auth/[...nextauth]/_authOptions";
 
 import dbConnect from "../../../../lib/mongodb";
 import PremiumUser, { TIER_ORDER } from "../../../models/PremiumUser";
