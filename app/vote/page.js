@@ -34,7 +34,7 @@ export default function VotePage() {
         </h1>
 
         <p className="text-sm sm:text-base text-[var(--text-muted)] max-w-2xl">
-          Voting keeps <strong>World of Communities</strong> trending on bot
+          Voting keeps <strong>Web of Communities</strong> trending on bot
           lists and unlocks bonus rewards for you. Hit the vote buttons below,
           then let the dashboard sync your <em>exam passes, duel wins, and coins</em>
           with your Discord account.

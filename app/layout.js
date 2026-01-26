@@ -6,7 +6,7 @@ import { WocThemeProvider } from "./WocThemeProvider";
 import WocFloatingAssistant from "./components/WocFloatingAssistant";
 
 export const metadata = {
-  title: "World of Communities",
+  title: "Web of Communities",
   description:
     "Discord adventure engine: clans, exams, duels, marriage, housing & more.",
 };

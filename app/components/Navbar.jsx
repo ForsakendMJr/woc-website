@@ -87,7 +87,7 @@ export default function Navbar() {
               shadow-[0_10px_30px_rgba(0,0,0,0.35)]
             "
             aria-label="WoC"
-            title="World of Communities"
+            title="Web of Communities"
           >
             <Image
               src="/woc-avatar.png"
@@ -109,7 +109,7 @@ export default function Navbar() {
 
           <div className="leading-tight">
             <div className="text-sm font-semibold tracking-wide text-[var(--text-main)]">
-              World of Communities
+              Web of Communities
             </div>
             <div className="text-[0.72rem] text-[var(--text-muted)] group-hover:text-[var(--text-main)] transition">
               Control panel · modules · logs · vibes

@@ -109,7 +109,7 @@ export default function CommandsPage() {
   return (
     <>
       <Head>
-        <title>Commands • World of Communities</title>
+        <title>Commands • Web of Communities</title>
       </Head>
 
       <main className="woc-shell min-h-screen">

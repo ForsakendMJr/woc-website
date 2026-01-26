@@ -18,7 +18,7 @@ export default function TutorialPage() {
   return (
     <>
       <Head>
-        <title>WoC Tutorial • World of Communities</title>
+        <title>WoC Tutorial • Web of Communities</title>
       </Head>
 
       <main className="woc-shell min-h-screen">
@@ -32,7 +32,7 @@ export default function TutorialPage() {
               <h1 className="text-3xl lg:text-4xl font-semibold mb-2">
                 Learn the{" "}
                 <span className="woc-hero-gradient bg-clip-text text-transparent">
-                  World of Communities
+                  Web of Communities
                 </span>
               </h1>
 

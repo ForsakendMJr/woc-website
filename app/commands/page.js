@@ -145,7 +145,7 @@ export default function CommandsPage() {
         <p>
           Commands are discoverable via Discord’s slash UI, but this page gives
           you the **story** around each system: why it exists, when to use it,
-          and how it connects to the rest of World of Communities.
+          and how it connects to the rest of Web of Communities.
         </p>
       </PageHeader>
 
