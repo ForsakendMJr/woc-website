@@ -16,9 +16,9 @@ function absUrl(path = "/") {
 function getPriceIdForLevel(levelRaw) {
   const level = String(levelRaw || "1").trim();
 
-  if (level === "1") return process.env.STRIPE_PRICE_WOC_LEVEL_1;
-  if (level === "2") return process.env.STRIPE_PRICE_WOC_LEVEL_2;
-  if (level === "3") return process.env.STRIPE_PRICE_WOC_LEVEL_3;
+  if (level === "1") return process.env.STRIPE_PRICE_WOC_L1;
+  if (level === "2") return process.env.STRIPE_PRICE_WOC_L2;
+  if (level === "3") return process.env.STRIPE_PRICE_WOC_L3;
 
   // optional fallback for testing
   return process.env.STRIPE_PRICE_TEST_ZERO;
