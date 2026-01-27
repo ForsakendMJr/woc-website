@@ -8,10 +8,6 @@ export const dynamic = "force-dynamic";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-function isSnowflake(id) {
-  return /^[0-9]{17,20}$/.test(String(id || "").trim());
-}
-
 function tierFromLevel(level) {
   const x = String(level || "").trim();
   if (x === "1") return "supporter";
@@ -21,7 +17,7 @@ function tierFromLevel(level) {
 }
 
 async function grantPremium({ discordId, tier, meta = {} }) {
-  if (!isSnowflake(discordId)) return;
+  if (!/^[0-9]{17,20}$/.test(String(discordId || "").trim())) return;
 
   await dbConnect();
 
@@ -31,7 +27,7 @@ async function grantPremium({ discordId, tier, meta = {} }) {
       $set: {
         discordId,
         tier,
-        expiresAt: null, // subscription-based: active until cancelled
+        expiresAt: null, // active until cancelled (we flip to free on cancel/unpaid)
         meta: { ...(meta || {}) },
       },
     },
@@ -40,7 +36,7 @@ async function grantPremium({ discordId, tier, meta = {} }) {
 }
 
 async function setFree({ discordId, meta = {} }) {
-  if (!isSnowflake(discordId)) return;
+  if (!/^[0-9]{17,20}$/.test(String(discordId || "").trim())) return;
 
   await dbConnect();
 
@@ -48,23 +44,12 @@ async function setFree({ discordId, meta = {} }) {
     { discordId },
     {
       $set: {
-        discordId,
         tier: "free",
         expiresAt: null,
         meta: { ...(meta || {}) },
       },
     },
     { upsert: true, new: true }
-  );
-}
-
-async function setStripeStatusByDiscordId(discordId, status) {
-  if (!isSnowflake(discordId)) return;
-  await dbConnect();
-  await PremiumUser.findOneAndUpdate(
-    { discordId },
-    { $set: { meta: { lastStripeStatus: status } } },
-    { new: true }
   );
 }
 
@@ -80,7 +65,14 @@ export async function POST(req) {
       );
     }
 
-    // Stripe requires the raw body for signature verification
+    if (!sig) {
+      return NextResponse.json(
+        { ok: false, error: "Missing stripe-signature header" },
+        { status: 400 }
+      );
+    }
+
+    // Stripe requires raw body for signature verification
     const rawBody = await req.text();
 
     let event;
@@ -88,39 +80,37 @@ export async function POST(req) {
       event = stripe.webhooks.constructEvent(rawBody, sig, secret);
     } catch (err) {
       return NextResponse.json(
-        { ok: false, error: `Webhook signature verify failed: ${err?.message || err}` },
+        {
+          ok: false,
+          error: `Webhook signature verify failed: ${err?.message || err}`,
+        },
         { status: 400 }
-      );
-    }
-
-    // ✅ Idempotency guard: don’t process the same event twice
-    const eventId = event?.id;
-    if (eventId) {
-      await dbConnect();
-      const already = await PremiumUser.findOne({ "meta.lastStripeEventId": eventId }).lean();
-      if (already) return NextResponse.json({ ok: true, idempotent: true });
-
-      // Mark event as seen on a dummy record (or first record we touch)
-      // We'll also overwrite it later when we update the actual user record.
-      await PremiumUser.updateOne(
-        { discordId: "__stripe_event__" },
-        { $set: { discordId: "__stripe_event__", meta: { lastStripeEventId: eventId } } },
-        { upsert: true }
       );
     }
 
     const type = event.type;
 
-    // ✅ 1) Checkout completed (best place to link Discord -> Stripe)
+    // 1) Checkout completed -> we can grant immediately (best signal)
     if (type === "checkout.session.completed") {
       const s = event.data.object;
 
-      const discordId = s.client_reference_id || s?.metadata?.discordId || "";
+      const discordId =
+        String(s.client_reference_id || s?.metadata?.discordId || "").trim();
+
+      // IMPORTANT: This only works if your checkout route sets client_reference_id/metadata.discordId
       const level = s?.metadata?.woc_level;
       const tier = s?.metadata?.woc_tier || tierFromLevel(level);
 
       const subscriptionId = s.subscription || null;
       const customerId = s.customer || null;
+
+      if (!discordId) {
+        // Don’t fail the webhook, just log it
+        console.warn("[stripe webhook] checkout completed but no discordId", {
+          sessionId: s.id,
+        });
+        return NextResponse.json({ ok: true, warning: "No discordId on session" });
+      }
 
       await grantPremium({
         discordId,
@@ -129,120 +119,57 @@ export async function POST(req) {
           stripeCustomerId: customerId,
           stripeSubscriptionId: subscriptionId,
           lastCheckoutSessionId: s.id,
-          lastStripeEventId: eventId || null,
-          lastStripeEventType: type,
+          lastStripeEvent: type,
         },
       });
 
       return NextResponse.json({ ok: true });
     }
 
-    // ✅ 2) Subscription created (sometimes arrives before/after checkout.completed)
-    if (type === "customer.subscription.created") {
-      const sub = event.data.object;
-      const status = String(sub.status || "").toLowerCase();
-
-      await dbConnect();
-      const doc = await PremiumUser.findOne({
-        "meta.stripeSubscriptionId": sub.id,
-      }).lean();
-
-      // If we haven't linked subscription to a discord user yet, we just record status.
-      if (doc?.discordId) {
-        await PremiumUser.findOneAndUpdate(
-          { discordId: doc.discordId },
-          {
-            $set: {
-              meta: {
-                ...(doc.meta || {}),
-                lastStripeStatus: status,
-                lastStripeEventId: eventId || null,
-                lastStripeEventType: type,
-              },
-            },
-          }
-        );
-      }
-
-      return NextResponse.json({ ok: true });
-    }
-
-    // ✅ 3) Subscription updated / deleted
+    // 2) Subscription changes/cancel
     if (type === "customer.subscription.updated" || type === "customer.subscription.deleted") {
       const sub = event.data.object;
-      const status = String(sub.status || "").toLowerCase();
-      const isActive = status === "active" || status === "trialing";
 
       await dbConnect();
-
       const doc = await PremiumUser.findOne({
         "meta.stripeSubscriptionId": sub.id,
       }).lean();
 
       if (!doc?.discordId) {
-        return NextResponse.json({ ok: true, note: "No matching user for subscription id." });
+        return NextResponse.json({ ok: true, note: "No matching user for subscription." });
       }
+
+      const status = String(sub.status || "").toLowerCase();
+      const isActive = status === "active" || status === "trialing";
 
       if (!isActive) {
         await setFree({
           discordId: doc.discordId,
-          meta: {
-            ...(doc.meta || {}),
-            lastStripeStatus: status,
-            lastStripeEventId: eventId || null,
-            lastStripeEventType: type,
-          },
+          meta: { ...(doc.meta || {}), lastStripeStatus: status, lastStripeEvent: type },
         });
       } else {
         await PremiumUser.findOneAndUpdate(
           { discordId: doc.discordId },
-          {
-            $set: {
-              meta: {
-                ...(doc.meta || {}),
-                lastStripeStatus: status,
-                lastStripeEventId: eventId || null,
-                lastStripeEventType: type,
-              },
-            },
-          }
+          { $set: { meta: { ...(doc.meta || {}), lastStripeStatus: status, lastStripeEvent: type } } }
         );
       }
 
       return NextResponse.json({ ok: true });
     }
 
-    // ✅ Optional: invoice events (doesn’t change tier, just records status)
-    if (type === "invoice.payment_succeeded" || type === "invoice.payment_failed") {
-      const inv = event.data.object;
-      const subId = inv.subscription || null;
-
-      if (subId) {
-        await dbConnect();
-        const doc = await PremiumUser.findOne({ "meta.stripeSubscriptionId": subId }).lean();
-        if (doc?.discordId) {
-          await PremiumUser.findOneAndUpdate(
-            { discordId: doc.discordId },
-            {
-              $set: {
-                meta: {
-                  ...(doc.meta || {}),
-                  lastInvoiceId: inv.id,
-                  lastInvoiceEvent: type,
-                  lastStripeEventId: eventId || null,
-                  lastStripeEventType: type,
-                },
-              },
-            }
-          );
-        }
-      }
-
+    // 3) Invoice payment signals (Stripe will send these; we should ACK them)
+    if (type === "invoice.payment_succeeded") {
+      // You can optionally record it, but DO NOT fail delivery
       return NextResponse.json({ ok: true });
     }
 
-    // Ignore other events
-    return NextResponse.json({ ok: true, ignored: true });
+    if (type === "invoice.payment_failed") {
+      // Optional: you might setFree here if you want “past_due/unpaid” to lose premium
+      return NextResponse.json({ ok: true });
+    }
+
+    // Everything else: acknowledge
+    return NextResponse.json({ ok: true });
   } catch (e) {
     return NextResponse.json(
       { ok: false, error: String(e?.message || e) },
