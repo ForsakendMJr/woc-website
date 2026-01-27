@@ -42,7 +42,13 @@ export async function POST(req) {
       );
     }
 
-    const allowed = new Set(["free", "supporter", "supporter_plus", "supporter_pp"]);
+const allowed = new Set([
+  "free",
+  "supporter",
+  "supporter_plus",
+  "supporter_plus_plus",
+]);
+
     if (!allowed.has(tier)) {
       return NextResponse.json(
         { ok: false, error: `Invalid tier. Allowed: ${Array.from(allowed).join(", ")}` },
