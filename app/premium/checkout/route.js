@@ -1,7 +1,7 @@
 import Stripe from "stripe";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { authOptions } from "../../auth/[...nextauth]/_authOptions";
+import { authOptions } from "../../api/auth/[...nextauth]/_authOptions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
