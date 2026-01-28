@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 
 // ✅ correct relative import from app/api/premium/status -> app/api/auth
-import { authOptions } from "../../api/auth/[...nextauth]/_authOptions";
+import { authOptions } from "../../auth/[...nextauth]/_authOptions";
 
 import dbConnect from "../../../lib/mongodb";
 import PremiumUser, { TIER_ORDER } from "../../models/PremiumUser";
