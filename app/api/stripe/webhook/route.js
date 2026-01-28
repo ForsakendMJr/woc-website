@@ -15,6 +15,7 @@ function tierFromLevel(level) {
   if (x === "3") return "supporter_plus_plus";
   return "free";
 }
+console.log("[stripe webhook] discordId resolved as:", discordId);
 
 async function grantPremium({ discordId, tier, meta = {} }) {
   if (!/^[0-9]{17,20}$/.test(String(discordId || "").trim())) return;
