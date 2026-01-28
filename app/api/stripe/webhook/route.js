@@ -17,41 +17,37 @@ function tierFromLevel(level) {
   return "free";
 }
 
-async function grantPremium({ discordId, tier, meta = {} }) {
-  if (!/^[0-9]{17,20}$/.test(String(discordId || "").trim())) return;
+function isSnowflake(id) {
+  return /^[0-9]{17,20}$/.test(String(id || "").trim());
+}
 
+async function upsertPremiumUser(discordId, updates) {
+  if (!isSnowflake(discordId)) return null;
   await dbConnect();
 
-  await PremiumUser.findOneAndUpdate(
+  const doc = await PremiumUser.findOneAndUpdate(
     { discordId },
-    {
-      $set: {
-        discordId,
-        tier,
-        expiresAt: null,
-        meta: { ...(meta || {}) },
-      },
-    },
+    { $set: { discordId, ...(updates || {}) } },
     { upsert: true, new: true }
-  );
+  ).lean();
+
+  return doc;
+}
+
+async function grantPremium({ discordId, tier, meta = {} }) {
+  return upsertPremiumUser(discordId, {
+    tier,
+    expiresAt: null, // subscription based: treated active until cancel/unpaid logic changes it
+    meta: { ...(meta || {}) },
+  });
 }
 
 async function setFree({ discordId, meta = {} }) {
-  if (!/^[0-9]{17,20}$/.test(String(discordId || "").trim())) return;
-
-  await dbConnect();
-
-  await PremiumUser.findOneAndUpdate(
-    { discordId },
-    {
-      $set: {
-        tier: "free",
-        expiresAt: null,
-        meta: { ...(meta || {}) },
-      },
-    },
-    { upsert: true, new: true }
-  );
+  return upsertPremiumUser(discordId, {
+    tier: "free",
+    expiresAt: null,
+    meta: { ...(meta || {}) },
+  });
 }
 
 export async function POST(req) {
@@ -89,33 +85,46 @@ export async function POST(req) {
       );
     }
 
-    const type = event.type;
+    const type = event?.type || "unknown";
+    const obj = event?.data?.object;
 
-    // ✅ Checkout completed -> grant immediately
+    // Optional global log (safe)
+    console.log("[stripe webhook] received:", type);
+
+    // ✅ 1) Checkout completed -> grant immediately
+    // This is your most reliable "grant premium" signal.
     if (type === "checkout.session.completed") {
-      const s = event.data.object;
+      const s = obj;
 
       const discordId = String(
-        s.client_reference_id || s?.metadata?.discordId || ""
+        s?.client_reference_id || s?.metadata?.discordId || ""
       ).trim();
-
-      // ✅ LOG GOES HERE (discordId exists here)
-      console.log("[stripe webhook] discordId resolved as:", discordId);
 
       const level = s?.metadata?.woc_level;
       const tier = s?.metadata?.woc_tier || tierFromLevel(level);
 
-      const subscriptionId = s.subscription || null;
-      const customerId = s.customer || null;
+      const subscriptionId = s?.subscription || null;
+      const customerId = s?.customer || null;
 
-      if (!discordId) {
-        console.warn("[stripe webhook] checkout completed but no discordId", {
-          sessionId: s.id,
-          hasClientReferenceId: !!s.client_reference_id,
-          hasMetadataDiscordId: !!s?.metadata?.discordId,
+      // ✅ Debug logs (discordId exists here)
+      console.log("[stripe webhook] discordId resolved as:", discordId);
+      console.log("[stripe webhook] level/tier:", { level, tier });
+      console.log("[stripe webhook] stripe ids:", {
+        sessionId: s?.id,
+        subscriptionId,
+        customerId,
+      });
+
+      if (!isSnowflake(discordId)) {
+        console.warn("[stripe webhook] checkout completed but no valid discordId", {
+          sessionId: s?.id,
+          client_reference_id: s?.client_reference_id || null,
           metadataKeys: Object.keys(s?.metadata || {}),
+          metadataDiscordId: s?.metadata?.discordId || null,
         });
-        return NextResponse.json({ ok: true, warning: "No discordId on session" });
+
+        // Don’t fail the webhook delivery. Stripe will keep retrying forever otherwise.
+        return NextResponse.json({ ok: true, warning: "No valid discordId on session" });
       }
 
       await grantPremium({
@@ -124,56 +133,74 @@ export async function POST(req) {
         meta: {
           stripeCustomerId: customerId,
           stripeSubscriptionId: subscriptionId,
-          lastCheckoutSessionId: s.id,
+          lastCheckoutSessionId: s?.id,
           lastStripeEvent: type,
+          lastStripeStatus: "checkout_completed",
         },
       });
 
+      console.log("[stripe webhook] granted premium to:", discordId);
       return NextResponse.json({ ok: true });
     }
 
-    // ✅ Subscription updated/deleted -> keep or revoke
-    if (
-      type === "customer.subscription.updated" ||
-      type === "customer.subscription.deleted"
-    ) {
-      const sub = event.data.object;
+    // ✅ 2) Subscription updated/deleted -> keep or revoke
+    if (type === "customer.subscription.updated" || type === "customer.subscription.deleted") {
+      const sub = obj;
 
+      const subId = sub?.id || "";
+      const status = String(sub?.status || "").toLowerCase();
+
+      // Find user by stored subscriptionId
       await dbConnect();
-      const doc = await PremiumUser.findOne({
-        "meta.stripeSubscriptionId": sub.id,
+      const existing = await PremiumUser.findOne({
+        "meta.stripeSubscriptionId": subId,
       }).lean();
 
-      if (!doc?.discordId) {
+      if (!existing?.discordId) {
+        // Not an error: could be older data, or checkout didn't store it.
+        console.log("[stripe webhook] no matching user for subscription:", subId);
         return NextResponse.json({ ok: true, note: "No matching user for subscription." });
       }
 
-      const status = String(sub.status || "").toLowerCase();
       const isActive = status === "active" || status === "trialing";
 
       if (!isActive) {
         await setFree({
-          discordId: doc.discordId,
-          meta: { ...(doc.meta || {}), lastStripeStatus: status, lastStripeEvent: type },
+          discordId: existing.discordId,
+          meta: {
+            ...(existing.meta || {}),
+            lastStripeStatus: status,
+            lastStripeEvent: type,
+          },
+        });
+        console.log("[stripe webhook] set FREE (subscription not active):", {
+          discordId: existing.discordId,
+          status,
         });
       } else {
-        await PremiumUser.findOneAndUpdate(
-          { discordId: doc.discordId },
-          {
-            $set: {
-              meta: { ...(doc.meta || {}), lastStripeStatus: status, lastStripeEvent: type },
-            },
-          }
-        );
+        // Keep tier as-is, just update status metadata
+        await upsertPremiumUser(existing.discordId, {
+          meta: {
+            ...(existing.meta || {}),
+            lastStripeStatus: status,
+            lastStripeEvent: type,
+          },
+        });
+        console.log("[stripe webhook] kept premium (subscription active):", {
+          discordId: existing.discordId,
+          status,
+        });
       }
 
       return NextResponse.json({ ok: true });
     }
 
-    // ✅ Invoice signals: just ACK (don’t fail delivery)
+    // ✅ 3) Invoice signals: always ACK.
+    // If you want to revoke on failed payments, you can extend this later.
     if (type === "invoice.payment_succeeded") {
       return NextResponse.json({ ok: true });
     }
+
     if (type === "invoice.payment_failed") {
       return NextResponse.json({ ok: true });
     }
@@ -181,6 +208,7 @@ export async function POST(req) {
     // Anything else: ACK
     return NextResponse.json({ ok: true });
   } catch (e) {
+    console.error("[stripe webhook] error:", e);
     return NextResponse.json(
       { ok: false, error: String(e?.message || e) },
       { status: 500 }
