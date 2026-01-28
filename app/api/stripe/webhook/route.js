@@ -100,8 +100,17 @@ export async function POST(req) {
         s?.client_reference_id || s?.metadata?.discordId || ""
       ).trim();
 
-      const level = s?.metadata?.woc_level;
-      const tier = s?.metadata?.woc_tier || tierFromLevel(level);
+let level = s?.metadata?.woc_level;
+let tier = s?.metadata?.woc_tier;
+
+// 🔧 DEV OVERRIDE: treat test plan as supporter
+if (level === "test") {
+  level = "1";
+  tier = "supporter";
+}
+
+tier = tier || tierFromLevel(level);
+
 
       const subscriptionId = s?.subscription || null;
       const customerId = s?.customer || null;
