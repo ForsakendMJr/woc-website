@@ -46,6 +46,7 @@ export default function PremiumPage() {
       </div>
 
       <div style={{ marginTop: 20, display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <button onClick={() => goCheckout("test")}>Testing</button>
         <button onClick={() => goCheckout("1")}>Buy Level 1</button>
         <button onClick={() => goCheckout("2")}>Buy Level 2</button>
         <button onClick={() => goCheckout("3")}>Buy Level 3</button>
