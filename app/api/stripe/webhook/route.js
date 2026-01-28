@@ -1,3 +1,4 @@
+// app/api/stripe/webhook/route.js
 import Stripe from "stripe";
 import { NextResponse } from "next/server";
 import dbConnect from "../../../../lib/mongodb";
@@ -15,7 +16,6 @@ function tierFromLevel(level) {
   if (x === "3") return "supporter_plus_plus";
   return "free";
 }
-console.log("[stripe webhook] discordId resolved as:", discordId);
 
 async function grantPremium({ discordId, tier, meta = {} }) {
   if (!/^[0-9]{17,20}$/.test(String(discordId || "").trim())) return;
@@ -28,7 +28,7 @@ async function grantPremium({ discordId, tier, meta = {} }) {
       $set: {
         discordId,
         tier,
-        expiresAt: null, // active until cancelled (we flip to free on cancel/unpaid)
+        expiresAt: null,
         meta: { ...(meta || {}) },
       },
     },
@@ -73,7 +73,7 @@ export async function POST(req) {
       );
     }
 
-    // Stripe requires raw body for signature verification
+    // Stripe requires RAW body for signature verification
     const rawBody = await req.text();
 
     let event;
@@ -91,14 +91,17 @@ export async function POST(req) {
 
     const type = event.type;
 
-    // 1) Checkout completed -> we can grant immediately (best signal)
+    // ✅ Checkout completed -> grant immediately
     if (type === "checkout.session.completed") {
       const s = event.data.object;
 
-      const discordId =
-        String(s.client_reference_id || s?.metadata?.discordId || "").trim();
+      const discordId = String(
+        s.client_reference_id || s?.metadata?.discordId || ""
+      ).trim();
 
-      // IMPORTANT: This only works if your checkout route sets client_reference_id/metadata.discordId
+      // ✅ LOG GOES HERE (discordId exists here)
+      console.log("[stripe webhook] discordId resolved as:", discordId);
+
       const level = s?.metadata?.woc_level;
       const tier = s?.metadata?.woc_tier || tierFromLevel(level);
 
@@ -106,9 +109,11 @@ export async function POST(req) {
       const customerId = s.customer || null;
 
       if (!discordId) {
-        // Don’t fail the webhook, just log it
         console.warn("[stripe webhook] checkout completed but no discordId", {
           sessionId: s.id,
+          hasClientReferenceId: !!s.client_reference_id,
+          hasMetadataDiscordId: !!s?.metadata?.discordId,
+          metadataKeys: Object.keys(s?.metadata || {}),
         });
         return NextResponse.json({ ok: true, warning: "No discordId on session" });
       }
@@ -127,8 +132,11 @@ export async function POST(req) {
       return NextResponse.json({ ok: true });
     }
 
-    // 2) Subscription changes/cancel
-    if (type === "customer.subscription.updated" || type === "customer.subscription.deleted") {
+    // ✅ Subscription updated/deleted -> keep or revoke
+    if (
+      type === "customer.subscription.updated" ||
+      type === "customer.subscription.deleted"
+    ) {
       const sub = event.data.object;
 
       await dbConnect();
@@ -151,25 +159,26 @@ export async function POST(req) {
       } else {
         await PremiumUser.findOneAndUpdate(
           { discordId: doc.discordId },
-          { $set: { meta: { ...(doc.meta || {}), lastStripeStatus: status, lastStripeEvent: type } } }
+          {
+            $set: {
+              meta: { ...(doc.meta || {}), lastStripeStatus: status, lastStripeEvent: type },
+            },
+          }
         );
       }
 
       return NextResponse.json({ ok: true });
     }
 
-    // 3) Invoice payment signals (Stripe will send these; we should ACK them)
+    // ✅ Invoice signals: just ACK (don’t fail delivery)
     if (type === "invoice.payment_succeeded") {
-      // You can optionally record it, but DO NOT fail delivery
       return NextResponse.json({ ok: true });
     }
-
     if (type === "invoice.payment_failed") {
-      // Optional: you might setFree here if you want “past_due/unpaid” to lose premium
       return NextResponse.json({ ok: true });
     }
 
-    // Everything else: acknowledge
+    // Anything else: ACK
     return NextResponse.json({ ok: true });
   } catch (e) {
     return NextResponse.json(
