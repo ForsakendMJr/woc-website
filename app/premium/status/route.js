@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 
-// IMPORTANT: fix this import to YOUR actual authOptions export.
+// ✅ correct relative import from app/api/premium/status -> app/api/auth
 import { authOptions } from "../../api/auth/[...nextauth]/_authOptions";
 
-import dbConnect from "../../lib/mongodb";
+import dbConnect from "../../../lib/mongodb";
 import PremiumUser, { TIER_ORDER } from "../../models/PremiumUser";
 
 export const runtime = "nodejs";
@@ -43,12 +43,16 @@ export async function GET(req) {
     const session = await getServerSession(authOptions);
 
     if (!session) {
-      return NextResponse.json({ ok: true, authed: false, premium: false, tier: "free" });
+      return NextResponse.json({
+        ok: true,
+        authed: false,
+        premium: false,
+        active: false,
+        tier: "free",
+      });
     }
 
     const url = new URL(req.url);
-
-    // dev testing override (optional)
     const devOverride = url.searchParams.get("discordId") || "";
     const isDev = process.env.NODE_ENV !== "production";
 
@@ -61,9 +65,10 @@ export async function GET(req) {
         ok: true,
         authed: true,
         premium: false,
+        active: false,
         tier: "free",
         warning:
-          "Signed in, but Discord ID missing from session. Ensure NextAuth sets session.user.id to the Discord snowflake.",
+          "Signed in, but Discord ID missing from session. Ensure NextAuth sets session.user.id (Discord snowflake).",
       });
     }
 
@@ -71,7 +76,6 @@ export async function GET(req) {
 
     let doc = await PremiumUser.findOne({ discordId }).lean();
 
-    // Create default record if missing (optional but handy)
     if (!doc) {
       const created = await PremiumUser.create({
         discordId,
