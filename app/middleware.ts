@@ -33,6 +33,7 @@ export const config = {
     "/dashboard/:path*",
     "/api/discord/:path*",
     "/api/guilds/:path*",
+    "/premium/:path",
     // (optional but safe) if you later protect more APIs, Stripe is still allowed above
     "/api/stripe/:path*",
   ],
