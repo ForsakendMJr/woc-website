@@ -4,8 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
 const STATUS_ENDPOINT = "/api/premium/status";
-const CHECKOUT_ENDPOINT = (level) => `/api/premium/checkout?level=${encodeURIComponent(level)}`;
+const CHECKOUT_ENDPOINT = (level) =>
+  `/api/premium/checkout?level=${encodeURIComponent(level)}`;
 const SYNC_ENDPOINT = "/api/premium/sync-roles";
+const PORTAL_ENDPOINT = "/api/premium/portal";
 
 const TIER_ORDER = ["free", "supporter", "supporter_plus", "supporter_plus_plus"];
 
@@ -39,6 +41,8 @@ export default function PremiumPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState("");
 
+  const [portalLoading, setPortalLoading] = useState(false);
+
   async function loadStatus() {
     try {
       setErr("");
@@ -63,6 +67,7 @@ export default function PremiumPage() {
   const tier = String(status?.tier || "free").toLowerCase().trim();
   const rank = tierRank(tier);
   const discordId = status?.discordId || "";
+  const isPremium = !!status?.premium;
 
   const plans = useMemo(() => {
     return [
@@ -106,7 +111,6 @@ export default function PremiumPage() {
   }, []);
 
   function goCheckout(level) {
-    // Your checkout route redirects to Stripe, so we just navigate to it.
     window.location.href = CHECKOUT_ENDPOINT(level);
   }
 
@@ -118,12 +122,30 @@ export default function PremiumPage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data?.ok) throw new Error(data?.error || "Sync failed.");
       setSyncMsg(`Roles synced ✅ (tier: ${data.tier})`);
-      // refresh status after syncing (nice UX)
       await loadStatus();
     } catch (e) {
       setSyncMsg(String(e?.message || e));
     } finally {
       setSyncing(false);
+    }
+  }
+
+  async function openPortal() {
+    try {
+      setPortalLoading(true);
+      setErr("");
+
+      const res = await fetch(PORTAL_ENDPOINT, { cache: "no-store" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.ok || !data?.url) {
+        throw new Error(data?.error || "Failed to create portal session.");
+      }
+
+      window.location.href = data.url;
+    } catch (e) {
+      setErr(String(e?.message || e));
+    } finally {
+      setPortalLoading(false);
     }
   }
 
@@ -136,7 +158,7 @@ export default function PremiumPage() {
             <div className="text-sm text-white/60">WoC Premium</div>
             <h1 className="text-3xl font-semibold text-white">Upgrade your control room ✨</h1>
             <p className="mt-2 max-w-2xl text-white/70">
-              Unlock premium features, sync donor roles in the WoC hub, and keep your tier updated automatically.
+              Unlock premium features, sync donor roles in the WoC hub, and manage your subscription anytime.
             </p>
           </div>
 
@@ -180,6 +202,7 @@ export default function PremiumPage() {
                     <span className="text-white/60">Current:</span>{" "}
                     <span className="text-white">{prettyTier(tier)}</span>
                   </div>
+
                   {discordId ? (
                     <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80">
                       <span className="text-white/60">Discord ID:</span>{" "}
@@ -193,6 +216,16 @@ export default function PremiumPage() {
                     className="rounded-xl border border-white/10 bg-gradient-to-r from-violet-500/20 to-sky-500/20 px-4 py-2 text-sm text-white hover:from-violet-500/30 hover:to-sky-500/30 disabled:opacity-50"
                   >
                     {syncing ? "Syncing…" : "Sync Discord roles"}
+                  </button>
+
+                  {/* NEW: Manage subscription */}
+                  <button
+                    onClick={openPortal}
+                    disabled={!isPremium || portalLoading}
+                    title={!isPremium ? "You need an active premium plan to manage it in the portal." : ""}
+                    className="rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-sm text-white hover:bg-white/15 disabled:opacity-50"
+                  >
+                    {portalLoading ? "Opening…" : "Manage subscription"}
                   </button>
                 </>
               ) : (
@@ -218,8 +251,8 @@ export default function PremiumPage() {
             </div>
           ) : (
             <div className="mt-4 text-sm text-white/60">
-              Tip: if you just bought premium, click <span className="text-white">Sync Discord roles</span> if Discord is slow
-              to update.
+              If you just bought premium, Discord roles can take a moment. Hit{" "}
+              <span className="text-white">Sync Discord roles</span> if it doesn’t update quickly.
             </div>
           )}
         </div>
@@ -310,10 +343,9 @@ export default function PremiumPage() {
 
         {/* Footer note */}
         <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-sm text-white/70">
-          <div className="text-white/90 font-medium">How upgrades work</div>
+          <div className="text-white/90 font-medium">Manage & cancel</div>
           <div className="mt-2">
-            When you purchase a higher level, your Stripe webhook updates your tier in the database and syncs your Discord
-            roles in the WoC hub server. If Discord takes a moment, hit <span className="text-white">Sync Discord roles</span>.
+            Use <span className="text-white">Manage subscription</span> to update payment method, cancel, or view invoices in Stripe’s secure portal.
           </div>
         </div>
       </div>
