@@ -6,6 +6,7 @@ import Link from "next/link";
 const STATUS_ENDPOINT = "/api/premium/status";
 const CHECKOUT_ENDPOINT = (level) =>
   `/api/premium/checkout?level=${encodeURIComponent(level)}`;
+const SCHEDULE_UPGRADE_ENDPOINT = "/api/premium/schedule-upgrade";
 const SYNC_ENDPOINT = "/api/premium/sync-roles";
 const PORTAL_ENDPOINT = "/api/premium/portal";
 
@@ -33,6 +34,12 @@ function tierPill(tier) {
   return "Premium: Free";
 }
 
+function planEmoji(rank) {
+  if (rank === 3) return "👑";
+  if (rank === 2) return "⚡";
+  return "✨";
+}
+
 export default function PremiumPage() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState(null);
@@ -42,6 +49,9 @@ export default function PremiumPage() {
   const [syncMsg, setSyncMsg] = useState("");
 
   const [portalLoading, setPortalLoading] = useState(false);
+
+  const [schedLoading, setSchedLoading] = useState(false);
+  const [schedMsg, setSchedMsg] = useState("");
 
   async function loadStatus() {
     try {
@@ -68,6 +78,10 @@ export default function PremiumPage() {
   const rank = tierRank(tier);
   const discordId = status?.discordId || "";
   const isPremium = !!status?.premium;
+
+  // Optional: if your status endpoint exposes these, we’ll display them
+  const pendingTier = String(status?.pendingTier || "").toLowerCase().trim();
+  const pendingEffectiveAt = status?.pendingEffectiveAt || "";
 
   const plans = useMemo(() => {
     return [
@@ -111,7 +125,38 @@ export default function PremiumPage() {
   }, []);
 
   function goCheckout(level) {
+    // For FREE users only, we start a new subscription
     window.location.href = CHECKOUT_ENDPOINT(level);
+  }
+
+  async function scheduleUpgrade(level) {
+    try {
+      setSchedLoading(true);
+      setSchedMsg("");
+      setErr("");
+
+      const res = await fetch(SCHEDULE_UPGRADE_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ level }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.ok) {
+        throw new Error(data?.error || "Failed to schedule upgrade.");
+      }
+
+      const when = data?.pendingEffectiveAt
+        ? new Date(data.pendingEffectiveAt).toLocaleString()
+        : "next renewal";
+
+      setSchedMsg(`Upgrade scheduled ✅ Takes effect ${when}.`);
+      await loadStatus();
+    } catch (e) {
+      setSchedMsg(String(e?.message || e));
+    } finally {
+      setSchedLoading(false);
+    }
   }
 
   async function syncRoles() {
@@ -149,6 +194,8 @@ export default function PremiumPage() {
     }
   }
 
+  const showPendingBanner = authed && pendingTier && pendingTier !== tier;
+
   return (
     <div className="min-h-screen bg-[radial-gradient(1200px_600px_at_20%_-10%,rgba(168,85,247,0.35),transparent),radial-gradient(900px_500px_at_90%_10%,rgba(59,130,246,0.25),transparent)]">
       <div className="mx-auto max-w-6xl px-6 py-10">
@@ -156,7 +203,9 @@ export default function PremiumPage() {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <div className="text-sm text-white/60">WoC Premium</div>
-            <h1 className="text-3xl font-semibold text-white">Upgrade your control room ✨</h1>
+            <h1 className="text-3xl font-semibold text-white">
+              Upgrade your control room ✨
+            </h1>
             <p className="mt-2 max-w-2xl text-white/70">
               Unlock premium features, sync donor roles in the WoC hub, and manage your subscription anytime.
             </p>
@@ -218,7 +267,6 @@ export default function PremiumPage() {
                     {syncing ? "Syncing…" : "Sync Discord roles"}
                   </button>
 
-                  {/* NEW: Manage subscription */}
                   <button
                     onClick={openPortal}
                     disabled={!isPremium || portalLoading}
@@ -245,9 +293,32 @@ export default function PremiumPage() {
             </div>
           ) : null}
 
+          {showPendingBanner ? (
+            <div className="mt-4 rounded-xl border border-violet-400/20 bg-violet-500/10 px-4 py-3 text-sm text-white/85">
+              <div className="font-medium text-white">
+                Upgrade scheduled ✅
+              </div>
+              <div className="mt-1 text-white/75">
+                Your plan will switch to{" "}
+                <span className="text-white">{prettyTier(pendingTier)}</span>{" "}
+                {pendingEffectiveAt ? (
+                  <>
+                    on <span className="text-white">{new Date(pendingEffectiveAt).toLocaleString()}</span>.
+                  </>
+                ) : (
+                  <>at your next renewal.</>
+                )}
+              </div>
+            </div>
+          ) : null}
+
           {syncMsg ? (
             <div className="mt-4 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/80">
               {syncMsg}
+            </div>
+          ) : schedMsg ? (
+            <div className="mt-4 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/80">
+              {schedMsg}
             </div>
           ) : (
             <div className="mt-4 text-sm text-white/60">
@@ -261,11 +332,37 @@ export default function PremiumPage() {
         <div className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
           {plans.map((p) => {
             const pRank = tierRank(p.tierKey);
-            const isOwnedOrHigher = rank >= pRank && authed;
-            const isUpgrade = authed && pRank > rank;
             const isCurrent = authed && pRank === rank;
+            const isLower = authed && pRank < rank;
+            const isUpgrade = authed && pRank > rank;
 
-            const disabled = !authed || isOwnedOrHigher;
+            // Strategy:
+            // - Free users can buy any level (starts new subscription)
+            // - Premium users cannot "upgrade instantly" (no mid-cycle switching)
+            //   so show "Schedule upgrade next cycle" for higher tiers.
+            // - Lower tiers are not actionable.
+            const canBuy = authed && rank === 0 && !isCurrent;
+            const canSchedule = authed && rank > 0 && isUpgrade;
+
+            const disabled = !authed || isCurrent || isLower;
+
+            const actionLabel = !authed
+              ? "Sign in to purchase"
+              : isCurrent
+              ? "Current plan"
+              : isLower
+              ? "Lower tier"
+              : canBuy
+              ? `Buy Level ${p.level}`
+              : canSchedule
+              ? "Schedule upgrade (next cycle)"
+              : "Unavailable";
+
+            const actionHandler = () => {
+              if (!authed) return;
+              if (canBuy) return goCheckout(p.level);
+              if (canSchedule) return scheduleUpgrade(p.level);
+            };
 
             return (
               <div
@@ -278,7 +375,7 @@ export default function PremiumPage() {
                     : isUpgrade
                     ? "border-white/10 bg-white/[0.03]"
                     : "border-white/10 bg-white/[0.02]",
-                  isOwnedOrHigher ? "opacity-60" : "",
+                  isLower ? "opacity-60" : "",
                 ].join(" ")}
               >
                 <div className="absolute -top-24 -right-24 h-64 w-64 rounded-full bg-white/5 blur-2xl" />
@@ -290,12 +387,12 @@ export default function PremiumPage() {
                       <span className="text-white/80">{p.subtitle}</span>
                     </div>
                     <div className="mt-1 text-sm text-white/60">
-                      {p.badge} {pRank === 3 ? "👑" : pRank === 2 ? "⚡" : "✨"}
+                      {p.badge} {planEmoji(pRank)}
                     </div>
                   </div>
 
                   <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/70">
-                    {isCurrent ? "Current" : isOwnedOrHigher ? "Owned" : isUpgrade ? "Upgrade" : "Available"}
+                    {isCurrent ? "Current" : isLower ? "Lower" : isUpgrade ? "Upgrade" : "Available"}
                   </div>
                 </div>
 
@@ -310,30 +407,32 @@ export default function PremiumPage() {
 
                 <div className="mt-6 flex items-center gap-3">
                   <button
-                    onClick={() => goCheckout(p.level)}
-                    disabled={disabled}
+                    onClick={actionHandler}
+                    disabled={disabled || (!canBuy && !canSchedule && !isCurrent && !isLower)}
                     className={[
                       "w-full rounded-xl px-4 py-2 text-sm font-medium transition",
-                      disabled
+                      !authed || isCurrent || isLower
                         ? "cursor-not-allowed border border-white/10 bg-white/5 text-white/50"
-                        : "border border-white/10 bg-white/10 text-white hover:bg-white/15",
+                        : canBuy
+                        ? "border border-white/10 bg-white/10 text-white hover:bg-white/15"
+                        : canSchedule
+                        ? "border border-white/10 bg-gradient-to-r from-violet-500/25 to-sky-500/25 text-white hover:from-violet-500/35 hover:to-sky-500/35"
+                        : "cursor-not-allowed border border-white/10 bg-white/5 text-white/50",
                     ].join(" ")}
                   >
-                    {!authed
-                      ? "Sign in to purchase"
-                      : isCurrent
-                      ? "Current plan"
-                      : isOwnedOrHigher
-                      ? "Already included"
-                      : rank === 0
-                      ? `Buy Level ${p.level}`
-                      : `Upgrade to Level ${p.level}`}
+                    {schedLoading && canSchedule ? "Scheduling…" : actionLabel}
                   </button>
                 </div>
 
-                {authed && isUpgrade ? (
+                {authed && canSchedule ? (
                   <div className="mt-3 text-xs text-white/50">
-                    Upgrading swaps your tier roles automatically (we remove lower tier roles).
+                    This upgrade is scheduled for your next billing cycle (no mid-month charges).
+                  </div>
+                ) : null}
+
+                {authed && isLower ? (
+                  <div className="mt-3 text-xs text-white/50">
+                    You already have a higher tier.
                   </div>
                 ) : null}
               </div>
@@ -346,6 +445,9 @@ export default function PremiumPage() {
           <div className="text-white/90 font-medium">Manage & cancel</div>
           <div className="mt-2">
             Use <span className="text-white">Manage subscription</span> to update payment method, cancel, or view invoices in Stripe’s secure portal.
+          </div>
+          <div className="mt-2 text-white/60">
+            Upgrades are scheduled for renewal to avoid proration surprises.
           </div>
         </div>
       </div>

@@ -1,14 +1,18 @@
 // app/api/premium/sync-roles/route.js
 import { NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+
+// IMPORTANT: adjust this import if your authOptions export path differs
+import { authOptions } from "../../auth/[...nextauth]/_authOptions";
+
 import dbConnect from "../../../../lib/mongodb";
 import PremiumUser from "../../../models/PremiumUser";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// ✅ Your WoC hub + roles
+// ✅ Hub + roles
 const HUB_GUILD_ID = "902705980993859634";
-
 const ROLE_DONATOR = "1464497886669705226";
 const ROLE_L1 = "1466232621112496148";
 const ROLE_L2 = "1466232628741935228";
@@ -21,22 +25,15 @@ function isSnowflake(id) {
   return /^[0-9]{17,20}$/.test(String(id || "").trim());
 }
 
-function authed(req) {
-  const token = process.env.PREMIUM_ADMIN_TOKEN || "";
-  const got = req.headers.get("x-premium-admin-token") || "";
-  return token && got && got === token;
-}
-
-function normalizeTier(tierRaw) {
-  const t = String(tierRaw || "free").toLowerCase().trim();
-  if (t === "supporter") return "supporter";
-  if (t === "supporter_plus") return "supporter_plus";
-  if (t === "supporter_plus_plus") return "supporter_plus_plus";
-  return "free";
+function pickDiscordId(session) {
+  const u = session?.user || {};
+  const candidates = [u.discordId, u.id, u.sub, session?.sub].filter(Boolean);
+  const id = String(candidates[0] || "").trim();
+  return isSnowflake(id) ? id : "";
 }
 
 function roleForTier(tierRaw) {
-  const t = normalizeTier(tierRaw);
+  const t = String(tierRaw || "").toLowerCase().trim();
   if (t === "supporter") return ROLE_L1;
   if (t === "supporter_plus") return ROLE_L2;
   if (t === "supporter_plus_plus") return ROLE_L3;
@@ -81,72 +78,53 @@ async function discordRemoveRole(userId, roleId) {
   }
 }
 
-async function applyDiscordPremiumRoles(discordId, tierRaw) {
-  const tier = normalizeTier(tierRaw);
+async function applyDiscordPremiumRoles(discordId, tier) {
   const tierRole = roleForTier(tier);
 
-  // Free: remove all donor roles
-  if (!tierRole) {
-    for (const r of ALL_DONOR_ROLES) {
-      try {
-        await discordRemoveRole(discordId, r);
-      } catch (e) {}
+  if (tierRole) {
+    await discordAddRole(discordId, ROLE_DONATOR);
+    await discordAddRole(discordId, tierRole);
+
+    for (const r of PREMIUM_ROLES) {
+      if (r !== tierRole) {
+        try {
+          await discordRemoveRole(discordId, r);
+        } catch {}
+      }
     }
-    return { applied: "free", added: [], removed: ALL_DONOR_ROLES };
+    return;
   }
 
-  // Not free: ensure Donator + tier role
-  await discordAddRole(discordId, ROLE_DONATOR);
-  await discordAddRole(discordId, tierRole);
-
-  // Remove other tier roles
-  for (const r of PREMIUM_ROLES) {
-    if (r !== tierRole) {
-      try {
-        await discordRemoveRole(discordId, r);
-      } catch (e) {}
-    }
+  for (const r of ALL_DONOR_ROLES) {
+    try {
+      await discordRemoveRole(discordId, r);
+    } catch {}
   }
-
-  return {
-    applied: tier,
-    added: [ROLE_DONATOR, tierRole],
-    removed: PREMIUM_ROLES.filter((r) => r !== tierRole),
-  };
 }
 
-// ✅ POST { discordId: "..." } -> sync roles from DB
 export async function POST(req) {
   try {
-    if (!authed(req)) {
-      return NextResponse.json({ ok: false, error: "Unauthorized." }, { status: 401 });
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      return NextResponse.json({ ok: false, error: "Not signed in." }, { status: 401 });
     }
 
-    const body = await req.json().catch(() => ({}));
-    const discordId = String(body.discordId || "").trim();
-
-    if (!isSnowflake(discordId)) {
+    const discordId = pickDiscordId(session);
+    if (!discordId) {
       return NextResponse.json(
-        { ok: false, error: "Invalid discordId (snowflake required)." },
+        { ok: false, error: "Discord ID missing from session." },
         { status: 400 }
       );
     }
 
     await dbConnect();
-
     const doc = await PremiumUser.findOne({ discordId }).lean();
-    const tier = normalizeTier(doc?.tier);
+    const tier = String(doc?.tier || "free").trim();
 
-    console.log("[sync-roles] requested:", { discordId, dbTier: tier });
+    await applyDiscordPremiumRoles(discordId, tier);
 
-    const result = await applyDiscordPremiumRoles(discordId, tier);
-
-    return NextResponse.json(
-      { ok: true, discordId, tier, discord: result, foundInDb: !!doc },
-      { status: 200 }
-    );
+    return NextResponse.json({ ok: true, discordId, tier });
   } catch (e) {
-    console.error("[sync-roles] error:", e);
     return NextResponse.json(
       { ok: false, error: String(e?.message || e) },
       { status: 500 }

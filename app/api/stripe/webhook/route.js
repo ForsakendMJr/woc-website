@@ -20,15 +20,19 @@ const ROLE_L3 = "1466232629819867248";
 const PREMIUM_ROLES = [ROLE_L1, ROLE_L2, ROLE_L3];
 const ALL_DONOR_ROLES = [ROLE_DONATOR, ...PREMIUM_ROLES];
 
-// Tier ranking (used for upgrades)
-const TIER_ORDER = ["free", "supporter", "supporter_plus", "supporter_plus_plus"];
-const tierRank = (t) => {
-  const x = String(t || "free").toLowerCase().trim();
-  const i = TIER_ORDER.indexOf(x);
-  return i === -1 ? 0 : i;
-};
-const maxTier = (a, b) => (tierRank(a) >= tierRank(b) ? a : b);
+// ✅ PriceId -> Tier mapping (this is the MOST reliable way)
+function tierFromPriceId(priceId) {
+  const p1 = process.env.STRIPE_PRICE_WOC_L1;
+  const p2 = process.env.STRIPE_PRICE_WOC_L2;
+  const p3 = process.env.STRIPE_PRICE_WOC_L3;
 
+  if (priceId && p1 && priceId === p1) return "supporter";
+  if (priceId && p2 && priceId === p2) return "supporter_plus";
+  if (priceId && p3 && priceId === p3) return "supporter_plus_plus";
+  return "free";
+}
+
+// fallback if you still pass woc_level metadata sometimes
 function tierFromLevel(level) {
   const x = String(level || "").trim();
   if (x === "1") return "supporter";
@@ -45,24 +49,12 @@ function roleForTier(tierRaw) {
   return null;
 }
 
-function getDiscordBotToken() {
+async function discordAddRole(userId, roleId) {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) throw new Error("Missing DISCORD_BOT_TOKEN");
-  return token;
-}
 
-// Small helper so we can log Discord errors nicely
-async function discordFetch(url, options) {
-  const res = await fetch(url, options);
-  if (res.ok) return { ok: true, status: res.status, text: "" };
-  const txt = await res.text().catch(() => "");
-  return { ok: false, status: res.status, text: txt };
-}
-
-async function discordAddRole(userId, roleId) {
-  const token = getDiscordBotToken();
   const url = `https://discord.com/api/v10/guilds/${HUB_GUILD_ID}/members/${userId}/roles/${roleId}`;
-  const out = await discordFetch(url, {
+  const res = await fetch(url, {
     method: "PUT",
     headers: {
       Authorization: `Bot ${token}`,
@@ -70,14 +62,19 @@ async function discordAddRole(userId, roleId) {
     },
   });
 
-  // Success is usually 204
-  if (!out.ok) throw new Error(`Discord add role failed (${out.status}): ${out.text}`);
+  // 204 = success
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`Discord add role failed (${res.status}): ${txt}`);
+  }
 }
 
 async function discordRemoveRole(userId, roleId) {
-  const token = getDiscordBotToken();
+  const token = process.env.DISCORD_BOT_TOKEN;
+  if (!token) throw new Error("Missing DISCORD_BOT_TOKEN");
+
   const url = `https://discord.com/api/v10/guilds/${HUB_GUILD_ID}/members/${userId}/roles/${roleId}`;
-  const out = await discordFetch(url, {
+  const res = await fetch(url, {
     method: "DELETE",
     headers: {
       Authorization: `Bot ${token}`,
@@ -85,120 +82,72 @@ async function discordRemoveRole(userId, roleId) {
     },
   });
 
-  if (!out.ok) throw new Error(`Discord remove role failed (${out.status}): ${out.text}`);
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    // common: role not present; ignore 404-ish cases outside
+    throw new Error(`Discord remove role failed (${res.status}): ${txt}`);
+  }
 }
 
-/**
- * 🔄 “Sync my roles” logic lives here too:
- * We compute the desired role set from tier, then add/remove to match.
- * (We don’t need to read member roles; we just apply add/remove safely.)
- */
-async function applyDiscordPremiumRoles(discordId, tierRaw) {
-  const tier = String(tierRaw || "free").toLowerCase().trim();
+async function applyDiscordPremiumRoles(discordId, tier) {
   const tierRole = roleForTier(tier);
 
-  // Desired:
-  // - free: none of donor roles
-  // - paid: ROLE_DONATOR + tier role (only one tier role)
   if (tierRole) {
-    // Ensure donator + correct tier role
+    // Always ensure main Donator + tier role exists
     await discordAddRole(discordId, ROLE_DONATOR);
     await discordAddRole(discordId, tierRole);
 
     // Remove other tier roles
     for (const r of PREMIUM_ROLES) {
-      if (r === tierRole) continue;
-      try {
-        await discordRemoveRole(discordId, r);
-      } catch {
-        // ignore (role not present / etc)
+      if (r !== tierRole) {
+        try {
+          await discordRemoveRole(discordId, r);
+        } catch {}
       }
     }
     return;
   }
 
-  // Free: remove everything donor-related
+  // Free -> remove everything donor-related
   for (const r of ALL_DONOR_ROLES) {
     try {
       await discordRemoveRole(discordId, r);
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 }
 
-/**
- * ✅ Upgrades:
- * If user already has a higher tier in DB, we keep the higher tier.
- * (So buying Level 1 while already Level 3 won’t downgrade them.)
- */
-async function grantPremium({ discordId, incomingTier, meta = {} }) {
-  if (!/^[0-9]{17,20}$/.test(String(discordId || "").trim())) return null;
+function isSnowflake(id) {
+  return /^[0-9]{17,20}$/.test(String(id || "").trim());
+}
 
+async function upsertPremiumUser(discordId, patch) {
+  if (!isSnowflake(discordId)) return null;
   await dbConnect();
-
-  const existing = await PremiumUser.findOne({ discordId }).lean();
-  const existingTier = existing?.tier || "free";
-
-  const finalTier = maxTier(existingTier, incomingTier);
-
-  const mergedMeta = {
-    ...(existing?.meta || {}),
-    ...(meta || {}),
-    lastTierIncoming: String(incomingTier || "free"),
-    lastTierFinal: String(finalTier || "free"),
-    lastPremiumWriteAt: new Date().toISOString(),
-  };
 
   const updated = await PremiumUser.findOneAndUpdate(
     { discordId },
-    {
-      $set: {
-        discordId,
-        tier: finalTier,
-        expiresAt: null,
-        meta: mergedMeta,
-      },
-    },
+    { $set: { discordId, ...(patch || {}) } },
     { upsert: true, new: true }
   ).lean();
-
-  console.log("[stripe webhook] DB updated premium user:", {
-    discordId,
-    existingTier,
-    incomingTier,
-    finalTier,
-  });
 
   return updated;
 }
 
-async function setFree({ discordId, meta = {} }) {
-  if (!/^[0-9]{17,20}$/.test(String(discordId || "").trim())) return null;
-
+async function findByStripeLink({ subscriptionId, customerId }) {
   await dbConnect();
-
-  const existing = await PremiumUser.findOne({ discordId }).lean();
-  const mergedMeta = {
-    ...(existing?.meta || {}),
-    ...(meta || {}),
-    lastPremiumWriteAt: new Date().toISOString(),
-  };
-
-  const updated = await PremiumUser.findOneAndUpdate(
-    { discordId },
-    {
-      $set: {
-        tier: "free",
-        expiresAt: null,
-        meta: mergedMeta,
-      },
-    },
-    { upsert: true, new: true }
-  ).lean();
-
-  console.log("[stripe webhook] DB set user to free:", { discordId });
-  return updated;
+  if (subscriptionId) {
+    const doc = await PremiumUser.findOne({
+      "meta.stripeSubscriptionId": subscriptionId,
+    }).lean();
+    if (doc?.discordId) return doc;
+  }
+  if (customerId) {
+    const doc = await PremiumUser.findOne({
+      "meta.stripeCustomerId": customerId,
+    }).lean();
+    if (doc?.discordId) return doc;
+  }
+  return null;
 }
 
 export async function POST(req) {
@@ -207,13 +156,18 @@ export async function POST(req) {
     const sig = req.headers.get("stripe-signature") || "";
 
     if (!secret) {
-      return NextResponse.json({ ok: false, error: "Missing STRIPE_WEBHOOK_SECRET" }, { status: 500 });
+      return NextResponse.json(
+        { ok: false, error: "Missing STRIPE_WEBHOOK_SECRET" },
+        { status: 500 }
+      );
     }
     if (!sig) {
-      return NextResponse.json({ ok: false, error: "Missing stripe-signature header" }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "Missing stripe-signature header" },
+        { status: 400 }
+      );
     }
 
-    // Stripe requires RAW body for signature verification
     const rawBody = await req.text();
 
     let event;
@@ -229,113 +183,244 @@ export async function POST(req) {
     const type = event.type;
     console.log("[stripe webhook] received:", type);
 
-    // ✅ 1) Checkout completed -> grant + roles immediately
+    // ✅ 1) Checkout completed -> we can grant immediately (best signal)
     if (type === "checkout.session.completed") {
       const s = event.data.object;
 
-      const discordId = String(s.client_reference_id || s?.metadata?.discordId || "").trim();
-      const level = String(s?.metadata?.woc_level || "").trim();
-      const incomingTier = String(s?.metadata?.woc_tier || tierFromLevel(level)).trim().toLowerCase();
+      const discordId = String(
+        s.client_reference_id || s?.metadata?.discordId || ""
+      ).trim();
 
       const subscriptionId = s.subscription || null;
       const customerId = s.customer || null;
 
+      const level = String(s?.metadata?.woc_level || "").trim();
+      const tierFromMeta = String(s?.metadata?.woc_tier || tierFromLevel(level)).trim();
+
       console.log("[stripe webhook] discordId resolved as:", discordId);
-      console.log("[stripe webhook] level/incomingTier:", { level, incomingTier });
+      console.log("[stripe webhook] level/tier(meta):", { level, tier: tierFromMeta });
       console.log("[stripe webhook] stripe ids:", {
         sessionId: s.id,
         subscriptionId,
         customerId,
       });
 
-      if (!discordId) {
-        console.warn("[stripe webhook] checkout completed but no discordId", {
+      if (!isSnowflake(discordId)) {
+        console.warn("[stripe webhook] checkout completed but no valid discordId", {
           sessionId: s.id,
-          hasClientReferenceId: !!s.client_reference_id,
-          hasMetadataDiscordId: !!s?.metadata?.discordId,
+          client_reference_id: s.client_reference_id,
           metadataKeys: Object.keys(s?.metadata || {}),
         });
-        return NextResponse.json({ ok: true, warning: "No discordId on session" });
+        return NextResponse.json({ ok: true, warning: "No valid discordId on session" });
       }
 
-      const updated = await grantPremium({
-        discordId,
-        incomingTier,
-        meta: {
-          stripeCustomerId: customerId,
-          stripeSubscriptionId: subscriptionId,
-          lastCheckoutSessionId: s.id,
-          lastStripeEvent: type,
-        },
-      });
+      // Pull real tier from subscription price when possible
+      let tier = tierFromMeta;
+      if (subscriptionId) {
+        try {
+          const sub = await stripe.subscriptions.retrieve(subscriptionId);
+          const priceId = sub?.items?.data?.[0]?.price?.id || "";
+          const tierFromPrice = tierFromPriceId(priceId);
+          if (tierFromPrice !== "free") tier = tierFromPrice;
 
-      // ✅ Apply Discord roles using FINAL tier (upgrade-safe)
-      const finalTier = updated?.tier || incomingTier;
+          await upsertPremiumUser(discordId, {
+            tier,
+            expiresAt: null,
+            meta: {
+              stripeCustomerId: customerId,
+              stripeSubscriptionId: subscriptionId,
+              lastCheckoutSessionId: s.id,
+              lastStripeEvent: type,
+              currentPriceId: priceId || null,
+              lastStripeStatus: String(sub?.status || ""),
+              // clear any stale pending flags on fresh checkout
+              pendingTier: null,
+              pendingEffectiveAt: null,
+            },
+          });
+        } catch (e) {
+          console.error("[stripe webhook] sub retrieve failed:", String(e?.message || e));
+          await upsertPremiumUser(discordId, {
+            tier,
+            expiresAt: null,
+            meta: {
+              stripeCustomerId: customerId,
+              stripeSubscriptionId: subscriptionId,
+              lastCheckoutSessionId: s.id,
+              lastStripeEvent: type,
+            },
+          });
+        }
+      } else {
+        await upsertPremiumUser(discordId, {
+          tier,
+          expiresAt: null,
+          meta: {
+            stripeCustomerId: customerId,
+            stripeSubscriptionId: subscriptionId,
+            lastCheckoutSessionId: s.id,
+            lastStripeEvent: type,
+          },
+        });
+      }
 
+      // Apply Discord roles (don’t fail webhook if this fails)
       try {
-        await applyDiscordPremiumRoles(discordId, finalTier);
-        console.log("[stripe webhook] Discord roles synced:", { discordId, finalTier });
+        await applyDiscordPremiumRoles(discordId, tier);
+        console.log("[stripe webhook] Discord roles applied:", { discordId, tier });
       } catch (e) {
-        // Never fail Stripe delivery because Discord had a moment.
-        console.error("[stripe webhook] Discord role sync failed:", String(e?.message || e));
+        console.error("[stripe webhook] Discord role apply failed:", String(e?.message || e));
       }
 
-      return NextResponse.json({ ok: true, tier: finalTier });
+      return NextResponse.json({ ok: true });
     }
 
     // ✅ 2) Subscription updated/deleted -> revoke if not active
     if (type === "customer.subscription.updated" || type === "customer.subscription.deleted") {
       const sub = event.data.object;
 
-      await dbConnect();
-      const doc = await PremiumUser.findOne({ "meta.stripeSubscriptionId": sub.id }).lean();
-
-      if (!doc?.discordId) {
-        console.log("[stripe webhook] no matching user for subscription:", sub.id);
-        return NextResponse.json({ ok: true, note: "No matching user for subscription." });
-      }
-
+      const subscriptionId = sub.id || null;
+      const customerId = sub.customer || null;
       const status = String(sub.status || "").toLowerCase();
       const isActive = status === "active" || status === "trialing";
+      const priceId = sub?.items?.data?.[0]?.price?.id || null;
 
-      console.log("[stripe webhook] sub status:", { subId: sub.id, status, isActive });
+      const doc = await findByStripeLink({ subscriptionId, customerId });
+      if (!doc?.discordId) {
+        console.log("[stripe webhook] no matching user for subscription:", subscriptionId);
+        return NextResponse.json({ ok: true });
+      }
+
+      console.log("[stripe webhook] sub status:", { subscriptionId, status, isActive, priceId });
 
       if (!isActive) {
-        await setFree({
-          discordId: doc.discordId,
-          meta: { ...(doc.meta || {}), lastStripeStatus: status, lastStripeEvent: type },
+        await upsertPremiumUser(doc.discordId, {
+          tier: "free",
+          expiresAt: null,
+          meta: {
+            ...(doc.meta || {}),
+            lastStripeStatus: status,
+            lastStripeEvent: type,
+            currentPriceId: priceId,
+            pendingTier: null,
+            pendingEffectiveAt: null,
+          },
         });
 
         try {
           await applyDiscordPremiumRoles(doc.discordId, "free");
-          console.log("[stripe webhook] Discord roles revoked:", { discordId: doc.discordId });
+          console.log("[stripe webhook] Discord roles revoked:", doc.discordId);
         } catch (e) {
-          console.error("[stripe webhook] Discord revoke failed:", String(e?.message || e));
+          console.error("[stripe webhook] Discord role revoke failed:", String(e?.message || e));
         }
 
         return NextResponse.json({ ok: true });
       }
 
-      // Active: keep their current tier, but resync roles (safe)
-      try {
-        await applyDiscordPremiumRoles(doc.discordId, doc.tier || "free");
-      } catch {}
+      // active: just record + optionally re-sync roles
+      const inferredTier = tierFromPriceId(priceId);
+      const keepTier = inferredTier !== "free" ? inferredTier : (doc.tier || "free");
 
-      await PremiumUser.findOneAndUpdate(
-        { discordId: doc.discordId },
-        { $set: { meta: { ...(doc.meta || {}), lastStripeStatus: status, lastStripeEvent: type } } }
-      );
+      await upsertPremiumUser(doc.discordId, {
+        tier: keepTier,
+        expiresAt: null,
+        meta: {
+          ...(doc.meta || {}),
+          lastStripeStatus: status,
+          lastStripeEvent: type,
+          currentPriceId: priceId,
+        },
+      });
+
+      try {
+        await applyDiscordPremiumRoles(doc.discordId, keepTier);
+      } catch {}
 
       return NextResponse.json({ ok: true });
     }
 
-    // ✅ 3) Invoice signals: ACK only (don’t fail delivery)
-    if (type === "invoice.payment_succeeded") return NextResponse.json({ ok: true });
-    if (type === "invoice.payment_failed") return NextResponse.json({ ok: true });
+    // ✅ 3) Renewal payment succeeded -> ACTIVATE any scheduled tier
+    if (type === "invoice.payment_succeeded") {
+      const inv = event.data.object;
+
+      const subscriptionId = inv.subscription || null;
+      const customerId = inv.customer || null;
+
+      const doc = await findByStripeLink({ subscriptionId, customerId });
+      if (!doc?.discordId) {
+        console.log("[stripe webhook] invoice paid but no matching user", { subscriptionId, customerId });
+        return NextResponse.json({ ok: true });
+      }
+
+      // Read current subscription price -> determine tier
+      let tier = doc.tier || "free";
+      try {
+        if (subscriptionId) {
+          const sub = await stripe.subscriptions.retrieve(subscriptionId);
+          const priceId = sub?.items?.data?.[0]?.price?.id || "";
+          const inferred = tierFromPriceId(priceId);
+          if (inferred !== "free") tier = inferred;
+
+          console.log("[stripe webhook] invoice paid -> inferred tier:", {
+            discordId: doc.discordId,
+            priceId,
+            tier,
+          });
+
+          // If we had a pending tier, clear it now (renewal happened)
+          await upsertPremiumUser(doc.discordId, {
+            tier,
+            expiresAt: null,
+            meta: {
+              ...(doc.meta || {}),
+              lastStripeEvent: type,
+              lastStripeStatus: String(sub?.status || ""),
+              currentPriceId: priceId || null,
+              pendingTier: null,
+              pendingEffectiveAt: null,
+              lastInvoiceId: inv.id || null,
+            },
+          });
+        } else {
+          await upsertPremiumUser(doc.discordId, {
+            tier,
+            expiresAt: null,
+            meta: {
+              ...(doc.meta || {}),
+              lastStripeEvent: type,
+              pendingTier: null,
+              pendingEffectiveAt: null,
+              lastInvoiceId: inv.id || null,
+            },
+          });
+        }
+      } catch (e) {
+        console.error("[stripe webhook] invoice tier resolve failed:", String(e?.message || e));
+        // Still ACK. Don’t fail Stripe.
+        return NextResponse.json({ ok: true });
+      }
+
+      // Apply Discord roles based on the tier after renewal
+      try {
+        await applyDiscordPremiumRoles(doc.discordId, tier);
+      } catch (e) {
+        console.error("[stripe webhook] Discord role apply after invoice failed:", String(e?.message || e));
+      }
+
+      return NextResponse.json({ ok: true });
+    }
+
+    // ✅ 4) Payment failed: don’t instantly punish (Stripe retries), just ACK
+    if (type === "invoice.payment_failed") {
+      return NextResponse.json({ ok: true });
+    }
 
     return NextResponse.json({ ok: true });
   } catch (e) {
     console.error("[stripe webhook] fatal:", e);
-    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: String(e?.message || e) },
+      { status: 500 }
+    );
   }
 }
