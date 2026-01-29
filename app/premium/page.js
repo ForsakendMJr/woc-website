@@ -1,3 +1,4 @@
+// app/premium/page.js
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -38,6 +39,38 @@ function planEmoji(rank) {
   if (rank === 3) return "👑";
   if (rank === 2) return "⚡";
   return "✨";
+}
+
+function formatDateTime(iso) {
+  try {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    return d.toLocaleString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
+
+function formatDate(iso) {
+  try {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    return d.toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  } catch {
+    return "";
+  }
 }
 
 export default function PremiumPage() {
@@ -83,6 +116,10 @@ export default function PremiumPage() {
   const pendingTier = String(status?.pendingTier || "").toLowerCase().trim();
   const pendingEffectiveAt = status?.pendingEffectiveAt || "";
 
+  // NEW: renewal date + cancel state (if status endpoint provides it)
+  const renewalAt = status?.renewalAt || "";
+  const cancelAtPeriodEnd = !!status?.cancelAtPeriodEnd;
+
   const plans = useMemo(() => {
     return [
       {
@@ -91,6 +128,7 @@ export default function PremiumPage() {
         title: "Level 1",
         subtitle: "Supporter",
         badge: "Starter",
+        priceLabel: "£4.99/mo",
         perks: [
           "Premium modules unlocked",
           "Access to supporter-only features",
@@ -103,6 +141,7 @@ export default function PremiumPage() {
         title: "Level 2",
         subtitle: "Supporter+",
         badge: "Upgrade",
+        priceLabel: "£7.99/mo",
         perks: [
           "Everything in Level 1",
           "More premium controls & perks",
@@ -115,6 +154,7 @@ export default function PremiumPage() {
         title: "Level 3",
         subtitle: "Supporter++",
         badge: "Max",
+        priceLabel: "£11.99/mo",
         perks: [
           "Everything in Level 2",
           "Full premium access",
@@ -252,6 +292,19 @@ export default function PremiumPage() {
                     <span className="text-white">{prettyTier(tier)}</span>
                   </div>
 
+                  {/* NEW: Renewal date */}
+                  {isPremium && renewalAt ? (
+                    <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80">
+                      <span className="text-white/60">Renews:</span>{" "}
+                      <span className="text-white">{formatDate(renewalAt)}</span>
+                      {cancelAtPeriodEnd ? (
+                        <span className="ml-2 rounded-lg border border-amber-400/20 bg-amber-500/10 px-2 py-0.5 text-xs text-amber-100">
+                          Cancel scheduled
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+
                   {discordId ? (
                     <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80">
                       <span className="text-white/60">Discord ID:</span>{" "}
@@ -295,15 +348,13 @@ export default function PremiumPage() {
 
           {showPendingBanner ? (
             <div className="mt-4 rounded-xl border border-violet-400/20 bg-violet-500/10 px-4 py-3 text-sm text-white/85">
-              <div className="font-medium text-white">
-                Upgrade scheduled ✅
-              </div>
+              <div className="font-medium text-white">Upgrade scheduled ✅</div>
               <div className="mt-1 text-white/75">
                 Your plan will switch to{" "}
                 <span className="text-white">{prettyTier(pendingTier)}</span>{" "}
                 {pendingEffectiveAt ? (
                   <>
-                    on <span className="text-white">{new Date(pendingEffectiveAt).toLocaleString()}</span>.
+                    on <span className="text-white">{formatDateTime(pendingEffectiveAt)}</span>.
                   </>
                 ) : (
                   <>at your next renewal.</>
@@ -386,8 +437,12 @@ export default function PremiumPage() {
                       {p.title} <span className="text-white/60">·</span>{" "}
                       <span className="text-white/80">{p.subtitle}</span>
                     </div>
+
+                    {/* NEW: price label */}
                     <div className="mt-1 text-sm text-white/60">
-                      {p.badge} {planEmoji(pRank)}
+                      {p.badge} {planEmoji(pRank)}{" "}
+                      <span className="text-white/40">·</span>{" "}
+                      <span className="text-white/85 font-medium">{p.priceLabel}</span>
                     </div>
                   </div>
 
@@ -408,7 +463,7 @@ export default function PremiumPage() {
                 <div className="mt-6 flex items-center gap-3">
                   <button
                     onClick={actionHandler}
-                    disabled={disabled || (!canBuy && !canSchedule && !isCurrent && !isLower)}
+                    disabled={disabled || (!canBuy && !canSchedule && !isCurrent && !isLower) || (schedLoading && canSchedule)}
                     className={[
                       "w-full rounded-xl px-4 py-2 text-sm font-medium transition",
                       !authed || isCurrent || isLower
@@ -444,7 +499,8 @@ export default function PremiumPage() {
         <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-sm text-white/70">
           <div className="text-white/90 font-medium">Manage & cancel</div>
           <div className="mt-2">
-            Use <span className="text-white">Manage subscription</span> to update payment method, cancel, or view invoices in Stripe’s secure portal.
+            Use <span className="text-white">Manage subscription</span> to update payment method, cancel, or view invoices
+            in Stripe’s secure portal.
           </div>
           <div className="mt-2 text-white/60">
             Upgrades are scheduled for renewal to avoid proration surprises.

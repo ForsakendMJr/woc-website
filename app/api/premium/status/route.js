@@ -1,91 +1,110 @@
+// app/api/premium/status/route.js
+import Stripe from "stripe";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-
-// IMPORTANT: fix this import to YOUR actual authOptions export.
-import { authOptions } from "../../../api/auth/[...nextauth]/_authOptions";
-
-import dbConnect from "../../../lib/mongodb";
-import PremiumUser, { TIER_ORDER } from "../../../models/PremiumUser";
+import { authOptions } from "../../auth/[...nextauth]/_authOptions";
+import dbConnect from "../../../../lib/mongodb";
+import PremiumUser from "../../../models/PremiumUser";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function normalizeTier(t) {
-  const x = String(t || "free").trim().toLowerCase();
-  return TIER_ORDER.includes(x) ? x : "free";
-}
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-function tierRank(t) {
-  const i = TIER_ORDER.indexOf(normalizeTier(t));
-  return i === -1 ? 0 : i;
-}
-
-function computeActive({ tier, expiresAt }) {
-  const t = normalizeTier(tier);
-  if (t === "free") return false;
-
-  if (!expiresAt) return true; // lifetime
-  const exp = new Date(expiresAt);
-  if (Number.isNaN(exp.getTime())) return true;
-
-  return exp.getTime() > Date.now();
+function isSnowflake(id) {
+  return /^[0-9]{17,20}$/.test(String(id || "").trim());
 }
 
 function pickDiscordId(session) {
   const u = session?.user || {};
   const candidates = [u.discordId, u.id, u.sub, session?.sub].filter(Boolean);
   const id = String(candidates[0] || "").trim();
-  return /^[0-9]{17,20}$/.test(id) ? id : "";
+  return isSnowflake(id) ? id : "";
 }
 
-export async function GET(req) {
+export async function GET() {
   try {
     const session = await getServerSession(authOptions);
 
+    // Not signed in
     if (!session) {
-      return NextResponse.json({ ok: true, authed: false, premium: false, tier: "free" });
+      return NextResponse.json({
+        ok: true,
+        authed: false,
+        premium: false,
+        active: false,
+        tier: "free",
+        renewalAt: null,
+        cancelAtPeriodEnd: false,
+        pendingTier: "",
+        pendingEffectiveAt: "",
+        pendingBlocked: false,
+        pendingBlockedReason: "",
+      });
     }
 
-    const url = new URL(req.url);
+    const discordId = pickDiscordId(session);
 
-    // dev testing override (optional)
-    const devOverride = url.searchParams.get("discordId") || "";
-    const isDev = process.env.NODE_ENV !== "production";
-
-    const discordId =
-      (isDev && /^[0-9]{17,20}$/.test(devOverride) ? devOverride : "") ||
-      pickDiscordId(session);
-
+    // Signed in, but Discord ID missing or invalid
     if (!discordId) {
       return NextResponse.json({
         ok: true,
         authed: true,
+        discordId: "",
         premium: false,
+        active: false,
         tier: "free",
-        warning:
-          "Signed in, but Discord ID missing from session. Ensure NextAuth sets session.user.id to the Discord snowflake.",
+        expiresAt: null,
+        renewalAt: null,
+        cancelAtPeriodEnd: false,
+        pendingTier: "",
+        pendingEffectiveAt: "",
+        pendingBlocked: false,
+        pendingBlockedReason: "Discord ID missing from session.",
       });
     }
 
     await dbConnect();
 
-    let doc = await PremiumUser.findOne({ discordId }).lean();
+    const doc = await PremiumUser.findOne({ discordId }).lean();
 
-    // Create default record if missing (optional but handy)
-    if (!doc) {
-      const created = await PremiumUser.create({
-        discordId,
-        tier: "free",
-        expiresAt: null,
-        note: "",
-        meta: {},
-      });
-      doc = created.toObject();
+    const tier = String(doc?.tier || "free").toLowerCase().trim();
+    const premium = tier !== "free";
+    const active = premium; // your system treats tier as the truth
+    const expiresAt = doc?.expiresAt || null;
+
+    // Scheduled upgrade info stored in Mongo meta
+    const pendingTier = String(doc?.meta?.pendingTier || "").toLowerCase().trim();
+    const pendingEffectiveAt = doc?.meta?.pendingEffectiveAt || "";
+    const pendingBlocked = !!doc?.meta?.pendingBlocked;
+    const pendingBlockedReason = String(doc?.meta?.pendingBlockedReason || "");
+
+    // Stripe subscription info (optional)
+    let renewalAt = null;
+    let cancelAtPeriodEnd = false;
+    let stripeStatus = "";
+
+    const subId = doc?.meta?.stripeSubscriptionId || null;
+
+    if (subId && process.env.STRIPE_SECRET_KEY) {
+      try {
+        const sub = await stripe.subscriptions.retrieve(subId);
+
+        // current_period_end is unix seconds
+        if (sub?.current_period_end) {
+          renewalAt = new Date(sub.current_period_end * 1000).toISOString();
+        }
+
+        cancelAtPeriodEnd = !!sub?.cancel_at_period_end;
+        stripeStatus = String(sub?.status || "").toLowerCase();
+      } catch (e) {
+        // Don’t fail status endpoint if Stripe lookup fails
+        console.warn(
+          "[premium status] stripe sub retrieve failed:",
+          String(e?.message || e)
+        );
+      }
     }
-
-    const tier = normalizeTier(doc.tier);
-    const active = computeActive({ tier, expiresAt: doc.expiresAt });
-    const premium = active && tierRank(tier) > 0;
 
     return NextResponse.json({
       ok: true,
@@ -93,12 +112,21 @@ export async function GET(req) {
       discordId,
       premium,
       active,
-      tier: premium ? tier : "free",
-      expiresAt: doc.expiresAt ? new Date(doc.expiresAt).toISOString() : null,
-      note: doc.note || "",
+      tier,
+      expiresAt,
+
+      // Stripe UX extras
+      renewalAt,
+      cancelAtPeriodEnd,
+      stripeStatus,
+
+      // Pending upgrade UX extras
+      pendingTier,
+      pendingEffectiveAt,
+      pendingBlocked,
+      pendingBlockedReason,
     });
   } catch (e) {
-    console.error("[api/premium/status] error:", e);
     return NextResponse.json(
       { ok: false, error: String(e?.message || e) },
       { status: 500 }

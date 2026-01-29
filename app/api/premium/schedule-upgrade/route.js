@@ -77,14 +77,54 @@ export async function POST(req) {
         {
           ok: false,
           error:
-            "No active subscription found for this account yet. Buy Level 1 first (or complete checkout) then try upgrade.",
+            "No active subscription found for this account yet. Buy a plan first (or complete checkout) then try upgrade.",
         },
         { status: 400 }
       );
     }
 
-    // Retrieve subscription to get its item id
+    // Retrieve subscription to get current status + item id
     const sub = await stripe.subscriptions.retrieve(subId);
+
+    const status = String(sub?.status || "").toLowerCase();
+    const cancelAtPeriodEnd = !!sub?.cancel_at_period_end;
+
+    // If they are canceling or not in a modifiable state, don’t try to change the plan.
+    // Stripe can reject plan updates on canceled/canceling subscriptions depending on state.
+    if (cancelAtPeriodEnd || status === "canceled") {
+      // Store "pending" attempt in DB so UI can show a friendly message if you want
+      await PremiumUser.findOneAndUpdate(
+        { discordId },
+        {
+          $set: {
+            meta: {
+              ...(doc?.meta || {}),
+              pendingTier: targetTier,
+              pendingPriceId: targetPriceId,
+              pendingEffectiveAt: null,
+              pendingBlocked: true,
+              pendingBlockedReason:
+                "Your subscription is currently set to cancel. Open Manage subscription to resume it, then schedule an upgrade.",
+              lastStripeEvent: "schedule_upgrade_blocked",
+            },
+          },
+        },
+        { upsert: true }
+      );
+
+      return NextResponse.json(
+        {
+          ok: false,
+          blocked: true,
+          error:
+            "Your subscription is currently set to cancel. Please open Manage subscription and remove the cancellation (resume), then schedule the upgrade.",
+          cancelAtPeriodEnd,
+          status,
+        },
+        { status: 409 }
+      );
+    }
+
     const item = sub?.items?.data?.[0];
     if (!item?.id) {
       return NextResponse.json(
@@ -93,28 +133,50 @@ export async function POST(req) {
       );
     }
 
-    // If they already have that price, no-op
+    // If already on that price, no-op
     const currentPriceId = item?.price?.id || null;
     if (currentPriceId && currentPriceId === targetPriceId) {
+      // Clear pending if they somehow already match
+      await PremiumUser.findOneAndUpdate(
+        { discordId },
+        {
+          $set: {
+            meta: {
+              ...(doc?.meta || {}),
+              pendingTier: null,
+              pendingEffectiveAt: null,
+              pendingPriceId: null,
+              pendingBlocked: false,
+              pendingBlockedReason: null,
+              lastStripeEvent: "schedule_upgrade_noop",
+            },
+          },
+        },
+        { upsert: true }
+      );
+
       return NextResponse.json({
         ok: true,
+        scheduled: false,
         message: "Already on that plan.",
         currentPriceId,
         targetPriceId,
       });
     }
 
-    // ✅ Update price with NO proration => takes effect on next invoice
+    // ✅ Update price with NO proration => takes effect on next invoice/renewal
     const updated = await stripe.subscriptions.update(subId, {
       proration_behavior: "none",
       items: [{ id: item.id, price: targetPriceId }],
     });
 
+    // Best “effective” moment we can show for UI:
+    // When proration is none, change should apply next period. current_period_end is a good UX line.
     const effectiveAt = updated?.current_period_end
       ? new Date(updated.current_period_end * 1000).toISOString()
       : null;
 
-    // Store “pending” in your DB so UI can show it
+    // Store “pending” in DB so UI can show it
     await PremiumUser.findOneAndUpdate(
       { discordId },
       {
@@ -124,6 +186,8 @@ export async function POST(req) {
             pendingTier: targetTier,
             pendingEffectiveAt: effectiveAt,
             pendingPriceId: targetPriceId,
+            pendingBlocked: false,
+            pendingBlockedReason: null,
             lastStripeEvent: "schedule_upgrade",
           },
         },
