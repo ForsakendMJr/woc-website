@@ -1,64 +1,55 @@
-// app/premium/page.js
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
 const STATUS_ENDPOINT = "/api/premium/status";
-
-const TIERS = [
-  { level: "1", tier: "supporter", label: "Level 1", perks: ["Core premium", "Basic donor perks"] },
-  { level: "2", tier: "supporter_plus", label: "Level 2", perks: ["Everything in L1", "More premium modules"] },
-  { level: "3", tier: "supporter_plus_plus", label: "Level 3", perks: ["Everything in L2", "Highest tier perks"] },
-];
+const CHECKOUT_ENDPOINT = (level) => `/api/premium/checkout?level=${encodeURIComponent(level)}`;
+const SYNC_ENDPOINT = "/api/premium/sync-roles";
 
 const TIER_ORDER = ["free", "supporter", "supporter_plus", "supporter_plus_plus"];
-const tierRank = (t) => {
-  const x = String(t || "free").toLowerCase().trim();
-  const i = TIER_ORDER.indexOf(x);
+
+function tierRank(tier) {
+  const t = String(tier || "free").toLowerCase().trim();
+  const i = TIER_ORDER.indexOf(t);
   return i === -1 ? 0 : i;
-};
-
-function TierBadge({ tier }) {
-  const label =
-    tier === "supporter"
-      ? "Supporter"
-      : tier === "supporter_plus"
-      ? "Supporter+"
-      : tier === "supporter_plus_plus"
-      ? "Supporter++"
-      : "Free";
-
-  return (
-    <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-sm text-white/90">
-      <span className="h-2 w-2 rounded-full bg-emerald-400" />
-      Premium: <span className="font-semibold">{label}</span>
-    </span>
-  );
 }
 
-function Card({ children }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 shadow-[0_0_0_1px_rgba(255,255,255,0.04)] backdrop-blur-md">
-      {children}
-    </div>
-  );
+function prettyTier(tier) {
+  const t = String(tier || "free").toLowerCase().trim();
+  if (t === "supporter") return "Level 1 (Supporter)";
+  if (t === "supporter_plus") return "Level 2 (Supporter+)";
+  if (t === "supporter_plus_plus") return "Level 3 (Supporter++)";
+  return "Free";
+}
+
+function tierPill(tier) {
+  const t = String(tier || "free").toLowerCase().trim();
+  if (t === "supporter") return "Premium: Level 1 ✨";
+  if (t === "supporter_plus") return "Premium: Level 2 ✨✨";
+  if (t === "supporter_plus_plus") return "Premium: Level 3 ✨✨✨";
+  return "Premium: Free";
 }
 
 export default function PremiumPage() {
-  const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState(null);
   const [err, setErr] = useState("");
 
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState("");
+
   async function loadStatus() {
-    setErr("");
-    setLoading(true);
     try {
-      const r = await fetch(STATUS_ENDPOINT, { cache: "no-store" });
-      const j = await r.json();
-      setStatus(j);
+      setErr("");
+      setLoading(true);
+      const res = await fetch(STATUS_ENDPOINT, { cache: "no-store" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to load premium status.");
+      setStatus(data);
     } catch (e) {
       setErr(String(e?.message || e));
+      setStatus(null);
     } finally {
       setLoading(false);
     }
@@ -68,171 +59,261 @@ export default function PremiumPage() {
     loadStatus();
   }, []);
 
-  const currentTier = useMemo(() => {
-    return String(status?.tier || "free").toLowerCase().trim();
-  }, [status]);
-
-  const currentRank = useMemo(() => tierRank(currentTier), [currentTier]);
-
   const authed = !!status?.authed;
+  const tier = String(status?.tier || "free").toLowerCase().trim();
+  const rank = tierRank(tier);
+  const discordId = status?.discordId || "";
+
+  const plans = useMemo(() => {
+    return [
+      {
+        level: "1",
+        tierKey: "supporter",
+        title: "Level 1",
+        subtitle: "Supporter",
+        badge: "Starter",
+        perks: [
+          "Premium modules unlocked",
+          "Access to supporter-only features",
+          "Donator role in WoC hub",
+        ],
+      },
+      {
+        level: "2",
+        tierKey: "supporter_plus",
+        title: "Level 2",
+        subtitle: "Supporter+",
+        badge: "Upgrade",
+        perks: [
+          "Everything in Level 1",
+          "More premium controls & perks",
+          "Higher tier role in WoC hub",
+        ],
+      },
+      {
+        level: "3",
+        tierKey: "supporter_plus_plus",
+        title: "Level 3",
+        subtitle: "Supporter++",
+        badge: "Max",
+        perks: [
+          "Everything in Level 2",
+          "Full premium access",
+          "Top tier role in WoC hub",
+        ],
+      },
+    ];
+  }, []);
 
   function goCheckout(level) {
-    // your checkout route is /api/premium/checkout?level=#
-    window.location.href = `/api/premium/checkout?level=${encodeURIComponent(level)}`;
+    // Your checkout route redirects to Stripe, so we just navigate to it.
+    window.location.href = CHECKOUT_ENDPOINT(level);
+  }
+
+  async function syncRoles() {
+    try {
+      setSyncing(true);
+      setSyncMsg("");
+      const res = await fetch(SYNC_ENDPOINT, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.ok) throw new Error(data?.error || "Sync failed.");
+      setSyncMsg(`Roles synced ✅ (tier: ${data.tier})`);
+      // refresh status after syncing (nice UX)
+      await loadStatus();
+    } catch (e) {
+      setSyncMsg(String(e?.message || e));
+    } finally {
+      setSyncing(false);
+    }
   }
 
   return (
-    <div className="min-h-[calc(100vh-64px)] bg-gradient-to-b from-[#070B18] via-[#070B18] to-black px-4 py-10 text-white">
-      <div className="mx-auto w-full max-w-5xl">
-        <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <div className="min-h-screen bg-[radial-gradient(1200px_600px_at_20%_-10%,rgba(168,85,247,0.35),transparent),radial-gradient(900px_500px_at_90%_10%,rgba(59,130,246,0.25),transparent)]">
+      <div className="mx-auto max-w-6xl px-6 py-10">
+        {/* Header */}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h1 className="text-3xl font-semibold tracking-tight">WoC Premium</h1>
-            <p className="mt-2 text-white/70">
-              Manage your subscription, unlock premium features, and sync your donor powers in the WoC hub.
+            <div className="text-sm text-white/60">WoC Premium</div>
+            <h1 className="text-3xl font-semibold text-white">Upgrade your control room ✨</h1>
+            <p className="mt-2 max-w-2xl text-white/70">
+              Unlock premium features, sync donor roles in the WoC hub, and keep your tier updated automatically.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <TierBadge tier={currentTier} />
-            <button
-              onClick={loadStatus}
-              className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white/90 hover:bg-white/10"
-            >
-              Refresh status
-            </button>
+          <div className="flex flex-wrap gap-2">
             <Link
               href="/dashboard"
-              className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white/90 hover:bg-white/10"
+              className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white hover:bg-white/10"
             >
               Back to dashboard
             </Link>
+            <button
+              onClick={loadStatus}
+              className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white hover:bg-white/10"
+            >
+              Refresh
+            </button>
           </div>
         </div>
 
-        <Card>
-          <div className="p-6">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <div className="text-sm text-white/60">Your status</div>
-                <div className="mt-1 text-lg font-semibold">
-                  {loading ? "Checking the vault..." : authed ? "Signed in ✅" : "Not signed in"}
-                </div>
+        {/* Status card */}
+        <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] p-6 shadow-[0_0_0_1px_rgba(255,255,255,0.04),0_20px_60px_rgba(0,0,0,0.35)]">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <div className="h-11 w-11 rounded-2xl bg-white/5 ring-1 ring-white/10 grid place-items-center">
+                <span className="text-lg">🔮</span>
               </div>
-
-              <div className="text-sm text-white/70">
-                {err ? (
-                  <span className="text-red-300">Error: {err}</span>
-                ) : status?.discordId ? (
-                  <>
-                    Discord ID: <span className="font-mono text-white/90">{status.discordId}</span>
-                  </>
-                ) : null}
+              <div>
+                <div className="text-white font-medium">
+                  {loading ? "Loading status…" : authed ? "Signed in ✅" : "Not signed in"}
+                </div>
+                <div className="text-sm text-white/60">
+                  {loading ? "Checking your premium tier…" : tierPill(tier)}
+                </div>
               </div>
             </div>
 
-            <div className="mt-5 rounded-xl border border-white/10 bg-black/20 p-4 text-sm text-white/80">
-              {loading ? (
-                <div className="animate-pulse text-white/60">Loading status JSON…</div>
+            <div className="flex flex-wrap items-center gap-2">
+              {authed ? (
+                <>
+                  <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80">
+                    <span className="text-white/60">Current:</span>{" "}
+                    <span className="text-white">{prettyTier(tier)}</span>
+                  </div>
+                  {discordId ? (
+                    <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80">
+                      <span className="text-white/60">Discord ID:</span>{" "}
+                      <span className="text-white">{discordId}</span>
+                    </div>
+                  ) : null}
+
+                  <button
+                    onClick={syncRoles}
+                    disabled={syncing}
+                    className="rounded-xl border border-white/10 bg-gradient-to-r from-violet-500/20 to-sky-500/20 px-4 py-2 text-sm text-white hover:from-violet-500/30 hover:to-sky-500/30 disabled:opacity-50"
+                  >
+                    {syncing ? "Syncing…" : "Sync Discord roles"}
+                  </button>
+                </>
               ) : (
-                <pre className="whitespace-pre-wrap break-words">{JSON.stringify(status, null, 2)}</pre>
+                <Link
+                  href="/dashboard"
+                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white hover:bg-white/10"
+                >
+                  Sign in via dashboard
+                </Link>
               )}
             </div>
-
-            <div className="mt-4 text-xs text-white/50">
-              Roles are applied in your WoC hub server automatically after purchase. If you’re already in the hub, it
-              should sync within seconds (sometimes Discord takes a moment).
-            </div>
           </div>
-        </Card>
 
-        <div className="mt-8 grid gap-4 md:grid-cols-3">
-          {TIERS.map((t) => {
-            const rank = tierRank(t.tier);
-            const isCurrent = authed && currentRank === rank;
-            const isBelowOrEqual = authed && currentRank >= rank;
+          {err ? (
+            <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+              {err}
+            </div>
+          ) : null}
 
-            // ✅ Hide lower tiers completely once you’re above them
-            if (authed && currentRank > rank) return null;
+          {syncMsg ? (
+            <div className="mt-4 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/80">
+              {syncMsg}
+            </div>
+          ) : (
+            <div className="mt-4 text-sm text-white/60">
+              Tip: if you just bought premium, click <span className="text-white">Sync Discord roles</span> if Discord is slow
+              to update.
+            </div>
+          )}
+        </div>
+
+        {/* Plans */}
+        <div className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
+          {plans.map((p) => {
+            const pRank = tierRank(p.tierKey);
+            const isOwnedOrHigher = rank >= pRank && authed;
+            const isUpgrade = authed && pRank > rank;
+            const isCurrent = authed && pRank === rank;
+
+            const disabled = !authed || isOwnedOrHigher;
 
             return (
-              <Card key={t.level}>
-                <div className="p-6">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-sm text-white/60">{t.label}</div>
-                      <div className="mt-1 text-xl font-semibold">{t.tier.replaceAll("_", " ")}</div>
-                    </div>
+              <div
+                key={p.level}
+                className={[
+                  "relative overflow-hidden rounded-2xl border p-6",
+                  "shadow-[0_0_0_1px_rgba(255,255,255,0.04),0_20px_60px_rgba(0,0,0,0.35)]",
+                  isCurrent
+                    ? "border-violet-400/30 bg-violet-500/[0.08]"
+                    : isUpgrade
+                    ? "border-white/10 bg-white/[0.03]"
+                    : "border-white/10 bg-white/[0.02]",
+                  isOwnedOrHigher ? "opacity-60" : "",
+                ].join(" ")}
+              >
+                <div className="absolute -top-24 -right-24 h-64 w-64 rounded-full bg-white/5 blur-2xl" />
 
-                    {isCurrent ? (
-                      <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-xs text-emerald-200">
-                        Current
-                      </span>
-                    ) : (
-                      <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/70">
-                        Upgrade
-                      </span>
-                    )}
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-white text-xl font-semibold">
+                      {p.title} <span className="text-white/60">·</span>{" "}
+                      <span className="text-white/80">{p.subtitle}</span>
+                    </div>
+                    <div className="mt-1 text-sm text-white/60">
+                      {p.badge} {pRank === 3 ? "👑" : pRank === 2 ? "⚡" : "✨"}
+                    </div>
                   </div>
 
-                  <ul className="mt-4 space-y-2 text-sm text-white/70">
-                    {t.perks.map((p) => (
-                      <li key={p} className="flex items-center gap-2">
-                        <span className="h-1.5 w-1.5 rounded-full bg-white/60" />
-                        {p}
-                      </li>
-                    ))}
-                  </ul>
-
-                  <div className="mt-6">
-                    {!authed ? (
-                      <Link
-                        href="/dashboard"
-                        className="inline-flex w-full items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white/90 hover:bg-white/10"
-                      >
-                        Sign in via dashboard
-                      </Link>
-                    ) : isCurrent ? (
-                      <button
-                        disabled
-                        className="inline-flex w-full cursor-not-allowed items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white/50"
-                      >
-                        You’re already {t.label}
-                      </button>
-                    ) : isBelowOrEqual ? (
-                      <button
-                        onClick={() => goCheckout(t.level)}
-                        className="inline-flex w-full items-center justify-center rounded-xl bg-violet-500/90 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-500"
-                      >
-                        Upgrade to {t.label}
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => goCheckout(t.level)}
-                        className="inline-flex w-full items-center justify-center rounded-xl bg-violet-500/90 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-500"
-                      >
-                        Buy {t.label}
-                      </button>
-                    )}
+                  <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/70">
+                    {isCurrent ? "Current" : isOwnedOrHigher ? "Owned" : isUpgrade ? "Upgrade" : "Available"}
                   </div>
                 </div>
-              </Card>
+
+                <ul className="mt-5 space-y-2 text-sm text-white/70">
+                  {p.perks.map((x) => (
+                    <li key={x} className="flex gap-2">
+                      <span className="text-white/50">•</span>
+                      <span>{x}</span>
+                    </li>
+                  ))}
+                </ul>
+
+                <div className="mt-6 flex items-center gap-3">
+                  <button
+                    onClick={() => goCheckout(p.level)}
+                    disabled={disabled}
+                    className={[
+                      "w-full rounded-xl px-4 py-2 text-sm font-medium transition",
+                      disabled
+                        ? "cursor-not-allowed border border-white/10 bg-white/5 text-white/50"
+                        : "border border-white/10 bg-white/10 text-white hover:bg-white/15",
+                    ].join(" ")}
+                  >
+                    {!authed
+                      ? "Sign in to purchase"
+                      : isCurrent
+                      ? "Current plan"
+                      : isOwnedOrHigher
+                      ? "Already included"
+                      : rank === 0
+                      ? `Buy Level ${p.level}`
+                      : `Upgrade to Level ${p.level}`}
+                  </button>
+                </div>
+
+                {authed && isUpgrade ? (
+                  <div className="mt-3 text-xs text-white/50">
+                    Upgrading swaps your tier roles automatically (we remove lower tier roles).
+                  </div>
+                ) : null}
+              </div>
             );
           })}
         </div>
 
-        <div className="mt-8 flex flex-wrap items-center justify-between gap-3 text-sm text-white/60">
-          <div>
-            Need help? If you bought Premium but don’t see roles, make sure you’re in the hub server:{" "}
-            <span className="font-mono text-white/80">902705980993859634</span>
-          </div>
-          <div className="flex gap-3">
-            <Link href="/premium/success" className="hover:text-white">
-              Success page
-            </Link>
-            <span className="text-white/30">•</span>
-            <a href="/api/premium/status" className="hover:text-white">
-              Status API
-            </a>
+        {/* Footer note */}
+        <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-sm text-white/70">
+          <div className="text-white/90 font-medium">How upgrades work</div>
+          <div className="mt-2">
+            When you purchase a higher level, your Stripe webhook updates your tier in the database and syncs your Discord
+            roles in the WoC hub server. If Discord takes a moment, hit <span className="text-white">Sync Discord roles</span>.
           </div>
         </div>
       </div>
