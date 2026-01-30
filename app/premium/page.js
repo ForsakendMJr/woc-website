@@ -1,4 +1,3 @@
-// app/premium/page.js
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -12,6 +11,12 @@ const SYNC_ENDPOINT = "/api/premium/sync-roles";
 const PORTAL_ENDPOINT = "/api/premium/portal";
 
 const TIER_ORDER = ["free", "supporter", "supporter_plus", "supporter_plus_plus"];
+
+const PRICE_LABELS = {
+  1: "£4.99 / month",
+  2: "£7.99 / month",
+  3: "£11.99 / month",
+};
 
 function tierRank(tier) {
   const t = String(tier || "free").toLowerCase().trim();
@@ -30,8 +35,8 @@ function prettyTier(tier) {
 function tierPill(tier) {
   const t = String(tier || "free").toLowerCase().trim();
   if (t === "supporter") return "Premium: Level 1 ✨";
-  if (t === "supporter_plus") return "Premium: Level 2 ✨✨";
-  if (t === "supporter_plus_plus") return "Premium: Level 3 ✨✨✨";
+  if (t === "supporter_plus") return "Premium: Level 2 ⚡";
+  if (t === "supporter_plus_plus") return "Premium: Level 3 👑";
   return "Premium: Free";
 }
 
@@ -42,32 +47,11 @@ function planEmoji(rank) {
 }
 
 function formatDateTime(iso) {
+  if (!iso) return "";
   try {
-    if (!iso) return "";
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return "";
-    return d.toLocaleString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return "";
-  }
-}
-
-function formatDate(iso) {
-  try {
-    if (!iso) return "";
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return "";
-    return d.toLocaleDateString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
+    return d.toLocaleString();
   } catch {
     return "";
   }
@@ -83,7 +67,7 @@ export default function PremiumPage() {
 
   const [portalLoading, setPortalLoading] = useState(false);
 
-  const [schedLoading, setSchedLoading] = useState(false);
+  const [schedLoadingLevel, setSchedLoadingLevel] = useState(""); // track which level is scheduling
   const [schedMsg, setSchedMsg] = useState("");
 
   async function loadStatus() {
@@ -112,13 +96,14 @@ export default function PremiumPage() {
   const discordId = status?.discordId || "";
   const isPremium = !!status?.premium;
 
-  // Optional: if your status endpoint exposes these, we’ll display them
+  // extra fields from /api/premium/status
+  const renewalAt = status?.renewalAt || "";
+  const cancelAtPeriodEnd = !!status?.cancelAtPeriodEnd;
+
   const pendingTier = String(status?.pendingTier || "").toLowerCase().trim();
   const pendingEffectiveAt = status?.pendingEffectiveAt || "";
 
-  // NEW: renewal date + cancel state (if status endpoint provides it)
-  const renewalAt = status?.renewalAt || "";
-  const cancelAtPeriodEnd = !!status?.cancelAtPeriodEnd;
+  const showPendingBanner = authed && pendingTier && pendingTier !== tier;
 
   const plans = useMemo(() => {
     return [
@@ -128,7 +113,7 @@ export default function PremiumPage() {
         title: "Level 1",
         subtitle: "Supporter",
         badge: "Starter",
-        priceLabel: "£4.99/mo",
+        priceLabel: PRICE_LABELS[1],
         perks: [
           "Premium modules unlocked",
           "Access to supporter-only features",
@@ -141,7 +126,7 @@ export default function PremiumPage() {
         title: "Level 2",
         subtitle: "Supporter+",
         badge: "Upgrade",
-        priceLabel: "£7.99/mo",
+        priceLabel: PRICE_LABELS[2],
         perks: [
           "Everything in Level 1",
           "More premium controls & perks",
@@ -154,7 +139,7 @@ export default function PremiumPage() {
         title: "Level 3",
         subtitle: "Supporter++",
         badge: "Max",
-        priceLabel: "£11.99/mo",
+        priceLabel: PRICE_LABELS[3],
         perks: [
           "Everything in Level 2",
           "Full premium access",
@@ -165,13 +150,12 @@ export default function PremiumPage() {
   }, []);
 
   function goCheckout(level) {
-    // For FREE users only, we start a new subscription
     window.location.href = CHECKOUT_ENDPOINT(level);
   }
 
   async function scheduleUpgrade(level) {
     try {
-      setSchedLoading(true);
+      setSchedLoadingLevel(String(level));
       setSchedMsg("");
       setErr("");
 
@@ -186,16 +170,16 @@ export default function PremiumPage() {
         throw new Error(data?.error || "Failed to schedule upgrade.");
       }
 
-      const when = data?.pendingEffectiveAt
-        ? new Date(data.pendingEffectiveAt).toLocaleString()
-        : "next renewal";
+      const whenText = data?.pendingEffectiveAt
+        ? formatDateTime(data.pendingEffectiveAt)
+        : "your next renewal";
 
-      setSchedMsg(`Upgrade scheduled ✅ Takes effect ${when}.`);
+      setSchedMsg(`Upgrade scheduled ✅ Takes effect ${whenText}.`);
       await loadStatus();
     } catch (e) {
       setSchedMsg(String(e?.message || e));
     } finally {
-      setSchedLoading(false);
+      setSchedLoadingLevel("");
     }
   }
 
@@ -203,9 +187,12 @@ export default function PremiumPage() {
     try {
       setSyncing(true);
       setSyncMsg("");
+      setErr("");
+
       const res = await fetch(SYNC_ENDPOINT, { method: "POST" });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data?.ok) throw new Error(data?.error || "Sync failed.");
+
       setSyncMsg(`Roles synced ✅ (tier: ${data.tier})`);
       await loadStatus();
     } catch (e) {
@@ -234,8 +221,6 @@ export default function PremiumPage() {
     }
   }
 
-  const showPendingBanner = authed && pendingTier && pendingTier !== tier;
-
   return (
     <div className="min-h-screen bg-[radial-gradient(1200px_600px_at_20%_-10%,rgba(168,85,247,0.35),transparent),radial-gradient(900px_500px_at_90%_10%,rgba(59,130,246,0.25),transparent)]">
       <div className="mx-auto max-w-6xl px-6 py-10">
@@ -247,7 +232,7 @@ export default function PremiumPage() {
               Upgrade your control room ✨
             </h1>
             <p className="mt-2 max-w-2xl text-white/70">
-              Unlock premium features, sync donor roles in the WoC hub, and manage your subscription anytime.
+              Premium unlocks advanced controls, adds donor roles in the WoC hub, and keeps your perks synced.
             </p>
           </div>
 
@@ -269,7 +254,7 @@ export default function PremiumPage() {
 
         {/* Status card */}
         <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] p-6 shadow-[0_0_0_1px_rgba(255,255,255,0.04),0_20px_60px_rgba(0,0,0,0.35)]">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-center gap-3">
               <div className="h-11 w-11 rounded-2xl bg-white/5 ring-1 ring-white/10 grid place-items-center">
                 <span className="text-lg">🔮</span>
@@ -292,19 +277,20 @@ export default function PremiumPage() {
                     <span className="text-white">{prettyTier(tier)}</span>
                   </div>
 
-                  {/* NEW: Renewal date */}
-                  {isPremium && renewalAt ? (
+                  {!!renewalAt ? (
                     <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80">
                       <span className="text-white/60">Renews:</span>{" "}
-                      <span className="text-white">{formatDate(renewalAt)}</span>
-                      {cancelAtPeriodEnd ? (
-                        <span className="ml-2 rounded-lg border border-amber-400/20 bg-amber-500/10 px-2 py-0.5 text-xs text-amber-100">
-                          Cancel scheduled
-                        </span>
-                      ) : null}
+                      <span className="text-white">{formatDateTime(renewalAt)}</span>
                     </div>
                   ) : null}
 
+                  {cancelAtPeriodEnd ? (
+                    <div className="rounded-xl border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-50">
+                      Cancels at period end
+                    </div>
+                  ) : null}
+
+                  {/* If you still want Discord ID shown, keep this block. If not, remove it. */}
                   {discordId ? (
                     <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80">
                       <span className="text-white/60">Discord ID:</span>{" "}
@@ -383,18 +369,18 @@ export default function PremiumPage() {
         <div className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
           {plans.map((p) => {
             const pRank = tierRank(p.tierKey);
+
             const isCurrent = authed && pRank === rank;
             const isLower = authed && pRank < rank;
             const isUpgrade = authed && pRank > rank;
 
-            // Strategy:
-            // - Free users can buy any level (starts new subscription)
-            // - Premium users cannot "upgrade instantly" (no mid-cycle switching)
-            //   so show "Schedule upgrade next cycle" for higher tiers.
-            // - Lower tiers are not actionable.
+            // Behavior:
+            // - Free users: can buy any plan (creates subscription)
+            // - Premium users: can schedule upgrade for next cycle (no proration surprises)
             const canBuy = authed && rank === 0 && !isCurrent;
             const canSchedule = authed && rank > 0 && isUpgrade;
 
+            // block action on lower / current / not authed
             const disabled = !authed || isCurrent || isLower;
 
             const actionLabel = !authed
@@ -414,6 +400,8 @@ export default function PremiumPage() {
               if (canBuy) return goCheckout(p.level);
               if (canSchedule) return scheduleUpgrade(p.level);
             };
+
+            const schedulingThis = schedLoadingLevel === String(p.level);
 
             return (
               <div
@@ -437,12 +425,13 @@ export default function PremiumPage() {
                       {p.title} <span className="text-white/60">·</span>{" "}
                       <span className="text-white/80">{p.subtitle}</span>
                     </div>
-
-                    {/* NEW: price label */}
                     <div className="mt-1 text-sm text-white/60">
-                      {p.badge} {planEmoji(pRank)}{" "}
-                      <span className="text-white/40">·</span>{" "}
-                      <span className="text-white/85 font-medium">{p.priceLabel}</span>
+                      {p.badge} {planEmoji(pRank)}
+                    </div>
+                    <div className="mt-3 text-sm text-white/80">
+                      <span className="rounded-lg border border-white/10 bg-white/5 px-2 py-1">
+                        {p.priceLabel}
+                      </span>
                     </div>
                   </div>
 
@@ -463,7 +452,11 @@ export default function PremiumPage() {
                 <div className="mt-6 flex items-center gap-3">
                   <button
                     onClick={actionHandler}
-                    disabled={disabled || (!canBuy && !canSchedule && !isCurrent && !isLower) || (schedLoading && canSchedule)}
+                    disabled={
+                      disabled ||
+                      (!canBuy && !canSchedule && !isCurrent && !isLower) ||
+                      (schedulingThis && canSchedule)
+                    }
                     className={[
                       "w-full rounded-xl px-4 py-2 text-sm font-medium transition",
                       !authed || isCurrent || isLower
@@ -475,13 +468,13 @@ export default function PremiumPage() {
                         : "cursor-not-allowed border border-white/10 bg-white/5 text-white/50",
                     ].join(" ")}
                   >
-                    {schedLoading && canSchedule ? "Scheduling…" : actionLabel}
+                    {schedulingThis && canSchedule ? "Scheduling…" : actionLabel}
                   </button>
                 </div>
 
                 {authed && canSchedule ? (
                   <div className="mt-3 text-xs text-white/50">
-                    This upgrade is scheduled for your next billing cycle (no mid-month charges).
+                    Takes effect on your next billing cycle (no mid-month proration).
                   </div>
                 ) : null}
 
@@ -499,8 +492,7 @@ export default function PremiumPage() {
         <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-sm text-white/70">
           <div className="text-white/90 font-medium">Manage & cancel</div>
           <div className="mt-2">
-            Use <span className="text-white">Manage subscription</span> to update payment method, cancel, or view invoices
-            in Stripe’s secure portal.
+            Use <span className="text-white">Manage subscription</span> to update payment method, cancel, or view invoices in Stripe’s secure portal.
           </div>
           <div className="mt-2 text-white/60">
             Upgrades are scheduled for renewal to avoid proration surprises.

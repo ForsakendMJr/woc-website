@@ -2,8 +2,6 @@
 import Stripe from "stripe";
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-
-// IMPORTANT: adjust this import if your authOptions export path differs
 import { authOptions } from "../../auth/[...nextauth]/_authOptions";
 
 import dbConnect from "../../../../lib/mongodb";
@@ -77,51 +75,34 @@ export async function POST(req) {
         {
           ok: false,
           error:
-            "No active subscription found for this account yet. Buy a plan first (or complete checkout) then try upgrade.",
+            "No active subscription found for this account yet. Buy Level 1 (or any tier) first, then try upgrade.",
         },
         { status: 400 }
       );
     }
 
-    // Retrieve subscription to get current status + item id
+    // Retrieve subscription to get item and status
     const sub = await stripe.subscriptions.retrieve(subId);
 
-    const status = String(sub?.status || "").toLowerCase();
-    const cancelAtPeriodEnd = !!sub?.cancel_at_period_end;
+    // If subscription is canceled, Stripe won't let you change plan items.
+    // You must wait until it ends and then create a new subscription.
+    const subStatus = String(sub?.status || "").toLowerCase();
+    const canceled = subStatus === "canceled";
 
-    // If they are canceling or not in a modifiable state, don’t try to change the plan.
-    // Stripe can reject plan updates on canceled/canceling subscriptions depending on state.
-    if (cancelAtPeriodEnd || status === "canceled") {
-      // Store "pending" attempt in DB so UI can show a friendly message if you want
-      await PremiumUser.findOneAndUpdate(
-        { discordId },
-        {
-          $set: {
-            meta: {
-              ...(doc?.meta || {}),
-              pendingTier: targetTier,
-              pendingPriceId: targetPriceId,
-              pendingEffectiveAt: null,
-              pendingBlocked: true,
-              pendingBlockedReason:
-                "Your subscription is currently set to cancel. Open Manage subscription to resume it, then schedule an upgrade.",
-              lastStripeEvent: "schedule_upgrade_blocked",
-            },
-          },
-        },
-        { upsert: true }
-      );
+    if (canceled) {
+      const endIso = sub?.current_period_end
+        ? new Date(sub.current_period_end * 1000).toISOString()
+        : null;
 
       return NextResponse.json(
         {
           ok: false,
-          blocked: true,
           error:
-            "Your subscription is currently set to cancel. Please open Manage subscription and remove the cancellation (resume), then schedule the upgrade.",
-          cancelAtPeriodEnd,
-          status,
+            "Your subscription is already canceled, so Stripe won’t allow scheduling a plan change on it. Please wait until the current period ends, then purchase the new tier.",
+          currentPeriodEndsAt: endIso,
+          status: subStatus,
         },
-        { status: 409 }
+        { status: 400 }
       );
     }
 
@@ -133,28 +114,10 @@ export async function POST(req) {
       );
     }
 
-    // If already on that price, no-op
     const currentPriceId = item?.price?.id || null;
-    if (currentPriceId && currentPriceId === targetPriceId) {
-      // Clear pending if they somehow already match
-      await PremiumUser.findOneAndUpdate(
-        { discordId },
-        {
-          $set: {
-            meta: {
-              ...(doc?.meta || {}),
-              pendingTier: null,
-              pendingEffectiveAt: null,
-              pendingPriceId: null,
-              pendingBlocked: false,
-              pendingBlockedReason: null,
-              lastStripeEvent: "schedule_upgrade_noop",
-            },
-          },
-        },
-        { upsert: true }
-      );
 
+    // Already on that plan => no-op
+    if (currentPriceId && currentPriceId === targetPriceId) {
       return NextResponse.json({
         ok: true,
         scheduled: false,
@@ -164,19 +127,19 @@ export async function POST(req) {
       });
     }
 
-    // ✅ Update price with NO proration => takes effect on next invoice/renewal
+    // ✅ Update with NO proration (takes effect next invoice cycle)
+    // NOTE: Stripe applies the price change immediately to the subscription object,
+    // but with proration_behavior="none" it won't charge mid-cycle.
     const updated = await stripe.subscriptions.update(subId, {
       proration_behavior: "none",
       items: [{ id: item.id, price: targetPriceId }],
     });
 
-    // Best “effective” moment we can show for UI:
-    // When proration is none, change should apply next period. current_period_end is a good UX line.
     const effectiveAt = updated?.current_period_end
       ? new Date(updated.current_period_end * 1000).toISOString()
       : null;
 
-    // Store “pending” in DB so UI can show it
+    // Store pending info in DB for UI
     await PremiumUser.findOneAndUpdate(
       { discordId },
       {
@@ -186,8 +149,6 @@ export async function POST(req) {
             pendingTier: targetTier,
             pendingEffectiveAt: effectiveAt,
             pendingPriceId: targetPriceId,
-            pendingBlocked: false,
-            pendingBlockedReason: null,
             lastStripeEvent: "schedule_upgrade",
           },
         },
