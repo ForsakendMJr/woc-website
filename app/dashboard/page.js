@@ -5,6 +5,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { signIn, useSession } from "next-auth/react";
 import Link from "next/link";
 import { useWocTheme } from "../WocThemeProvider";
+import WelcomeModule from "./_components/WelcomeModule";
+
+// ...
+<WelcomeModule
+  guildId={selectedGuildId}
+  settings={settings}
+  onChange={setSettings}
+  channels={channels}
+/>
+
 
 const LS = { selectedGuild: "woc-selected-guild" };
 
