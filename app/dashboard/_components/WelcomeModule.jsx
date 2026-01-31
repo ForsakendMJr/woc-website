@@ -214,6 +214,17 @@ export default function WelcomeModule({
     });
   }, [channels]);
 
+
+function absolutizeMaybeLocalUrl(u) {
+  const s = String(u || "").trim();
+  if (!s) return "";
+  if (/^https?:\/\//i.test(s)) return s; // already absolute
+  if (s.startsWith("/") && typeof window !== "undefined") return `${window.location.origin}${s}`;
+  return s;
+}
+
+
+
   function setWelcome(patch) {
     const next = deepClone(settings || {});
     next.welcome = ensureWelcomeDefaults({ ...(next.welcome || {}), ...patch });
@@ -266,7 +277,7 @@ export default function WelcomeModule({
       textColor: card?.textColor || "#ffffff",
       overlayOpacity: clampNum(card?.overlayOpacity ?? 0.35, 0, 0.85),
       showAvatar: card?.showAvatar !== false,
-      backgroundUrl: bgForPreview,
+      backgroundUrl: absolutizeMaybeLocalUrl(bgForPreview),
       bust: previewBust,
     });
   }, [

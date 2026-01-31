@@ -2096,22 +2096,27 @@ export default function DashboardPage() {
 
                     {/* WELCOME */}
 {subtab === "welcome" ? (
-  <WelcomeModule
-    guildId={canonicalGuildId}
-    settings={settings}
-    onChange={(next) => {
-      setSettings(next);
-      setDirty(true);
-      setWelcomePreviewError("");
-      setWelcomePreviewBust(Date.now());
-    }}
-    channels={channels}
-    premiumActive={premiumActive}
-    premiumTier={premiumTier}
-    freeBackgrounds={WELCOME_BG_FREE_OPTIONS}
-    premiumBackgrounds={WELCOME_BG_PREMIUM_OPTIONS}
-  />
+  <div className="space-y-4">
+    <WelcomeModule
+      guildId={canonicalGuildId}
+      settings={settings}
+      onChange={(nextSettings) => {
+        setSettings(nextSettings);
+        setDirty(true);
+
+        // optional: if you want the dashboard-level preview bust to refresh too
+        setWelcomePreviewBust(Date.now());
+        setWelcomePreviewError("");
+      }}
+      channels={channels}
+      premiumActive={premiumActive}
+      premiumTier={premiumTier}
+      freeBackgrounds={WELCOME_BG_FREE_OPTIONS}
+      premiumBackgrounds={WELCOME_BG_PREMIUM_OPTIONS}
+    />
+  </div>
 ) : null}
+
 
 
 
