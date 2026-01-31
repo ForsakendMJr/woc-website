@@ -5,7 +5,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { signIn, useSession } from "next-auth/react";
 import Link from "next/link";
 import { useWocTheme } from "../WocThemeProvider";
-import WelcomeModule from "./_components/WelcomeModule";
 
 // ...
 <WelcomeModule
@@ -764,6 +763,136 @@ function buildWelcomeCardPreviewUrl({
 
   return `${WELCOME_CARD_PNG_ENDPOINT(guildId)}?${params.toString()}`;
 }
+
+
+function safeHexColor(v, fallback = "#7c3aed") {
+  const s = String(v || "").trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(s)) return s;
+  if (/^#[0-9a-fA-F]{3}$/.test(s)) return s;
+  return fallback;
+}
+
+function clampNum(n, min, max) {
+  const x = Number(n);
+  if (Number.isNaN(x)) return min;
+  return Math.max(min, Math.min(max, x));
+}
+
+function ensureEmbedDefaults(embed) {
+  const e = embed && typeof embed === "object" ? deepClone(embed) : {};
+
+  if (typeof e.title !== "string") e.title = "Welcome!";
+  if (typeof e.url !== "string") e.url = "";
+  if (typeof e.description !== "string")
+    e.description = "Welcome {user} to **{server}**!";
+
+  e.color = safeHexColor(e.color, "#7c3aed");
+
+  if (typeof e.thumbnailUrl !== "string") e.thumbnailUrl = "{avatar}";
+  if (typeof e.imageUrl !== "string") e.imageUrl = "";
+
+  if (!e.author || typeof e.author !== "object") e.author = {};
+  if (typeof e.author.name !== "string") e.author.name = "{server}";
+  if (typeof e.author.iconUrl !== "string") e.author.iconUrl = "";
+  if (typeof e.author.url !== "string") e.author.url = "";
+
+  if (!e.footer || typeof e.footer !== "object") e.footer = {};
+  if (typeof e.footer.text !== "string") e.footer.text = "Member #{membercount}";
+  if (typeof e.footer.iconUrl !== "string") e.footer.iconUrl = "";
+
+  if (!Array.isArray(e.fields)) e.fields = [];
+
+  // normalize fields
+  e.fields = e.fields
+    .filter(Boolean)
+    .slice(0, 25)
+    .map((f) => ({
+      name: typeof f?.name === "string" ? f.name : "Field title",
+      value: typeof f?.value === "string" ? f.value : "Field value",
+      inline: typeof f?.inline === "boolean" ? f.inline : false,
+    }));
+
+  return e;
+}
+
+function ensureCardDefaults(card) {
+  const c = card && typeof card === "object" ? deepClone(card) : {};
+
+  if (typeof c.enabled !== "boolean") c.enabled = false;
+  if (typeof c.title !== "string") c.title = "{user.name} just joined the server";
+  if (typeof c.subtitle !== "string") c.subtitle = "Member #{membercount}";
+  if (typeof c.backgroundColor !== "string") c.backgroundColor = "#0b1020";
+  if (typeof c.textColor !== "string") c.textColor = "#ffffff";
+  if (typeof c.overlayOpacity !== "number") c.overlayOpacity = 0.35;
+  if (typeof c.backgroundUrl !== "string") c.backgroundUrl = "";
+  if (typeof c.showAvatar !== "boolean") c.showAvatar = true;
+
+  c.overlayOpacity = clampNum(c.overlayOpacity, 0, 0.85);
+
+  return c;
+}
+
+function EmbedPreview({ embed }) {
+  const e = ensureEmbedDefaults(embed);
+
+  return (
+    <div className="rounded-2xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] p-4">
+      <div className="text-xs text-[var(--text-muted)] mb-2">Preview (approx)</div>
+
+      <div className="flex gap-3">
+        <div
+          className="w-1.5 rounded-full"
+          style={{ background: safeHexColor(e.color, "#7c3aed") }}
+        />
+        <div className="min-w-0 flex-1">
+          {e.author?.name ? (
+            <div className="text-[0.72rem] text-[var(--text-muted)]">
+              {e.author.name}
+            </div>
+          ) : null}
+
+          {e.title ? (
+            <div className="font-semibold text-sm break-words">{e.title}</div>
+          ) : null}
+
+          {e.description ? (
+            <div className="mt-2 text-sm text-[var(--text-muted)] whitespace-pre-wrap break-words">
+              {e.description}
+            </div>
+          ) : null}
+
+          {Array.isArray(e.fields) && e.fields.length ? (
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {e.fields.slice(0, 6).map((f, idx) => (
+                <div
+                  key={idx}
+                  className="rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_75%,transparent)] p-3"
+                >
+                  <div className="text-xs font-semibold break-words">{f.name}</div>
+                  <div className="mt-1 text-xs text-[var(--text-muted)] whitespace-pre-wrap break-words">
+                    {f.value}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {e.footer?.text ? (
+            <div className="mt-3 text-[0.72rem] text-[var(--text-muted)]">
+              {e.footer.text}
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="mt-3 text-[0.7rem] text-[var(--text-muted)]">
+        Tokens like {"{user}"} / {"{server}"} / {"{membercount}"} are shown as-is in preview.
+      </div>
+    </div>
+  );
+}
+
+
 
 export default function DashboardPage() {
   let woc = null;
@@ -1975,274 +2104,848 @@ export default function DashboardPage() {
                     ) : null}
 
                     {/* WELCOME */}
-                    {subtab === "welcome" ? (
-                      <div className="space-y-4">
-                        <SectionTitle
-                          title="Welcome"
-                          subtitle="Welcome channel + message template + autorole."
-                        />
+{subtab === "welcome" ? (
+  <div className="space-y-4">
+    <SectionTitle
+      title="Welcome"
+      subtitle="Message / Embed / Embed+Text / Card. Everything lives in settings.welcome.*"
+    />
 
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <label className="woc-card p-4">
-                            <div className="font-semibold text-sm">Enable welcome</div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">
-                              Turns on welcome posts.
-                            </div>
-                            <input
-                              type="checkbox"
-                              className="mt-3"
-                              checked={!!settings.welcome?.enabled}
-                              onChange={(e) => {
-                                setSettings((s) => ({
-                                  ...s,
-                                  welcome: { ...s.welcome, enabled: e.target.checked },
-                                }));
-                                setDirty(true);
-                              }}
-                            />
-                          </label>
+    <div className="grid gap-3 sm:grid-cols-2">
+      <label className="woc-card p-4">
+        <div className="font-semibold text-sm">Enable welcome</div>
+        <div className="text-xs text-[var(--text-muted)] mt-1">
+          Master switch for welcome payloads.
+        </div>
+        <input
+          type="checkbox"
+          className="mt-3"
+          checked={!!settings.welcome?.enabled}
+          onChange={(e) => {
+            setSettings((s) => ({
+              ...s,
+              welcome: ensureWelcomeDefaults({
+                ...s.welcome,
+                enabled: e.target.checked,
+              }),
+            }));
+            setDirty(true);
+          }}
+        />
+      </label>
 
-                          <div className="woc-card p-4">
-                            <div className="font-semibold text-sm">Welcome channel</div>
-                            <div className="text-xs text-[var(--text-muted)] mt-1">
-                              Where the welcome message is posted.
-                            </div>
+      <div className="woc-card p-4">
+        <div className="font-semibold text-sm">Welcome channel</div>
+        <div className="text-xs text-[var(--text-muted)] mt-1">
+          Where the welcome message is posted.
+        </div>
 
-                            <ChannelPicker
-                              channels={textChannels}
-                              value={settings.welcome?.channelId || ""}
-                              disabled={!gateInstalled || channelsLoading}
-                              onChange={(val) => {
-                                setSettings((s) => ({
-                                  ...s,
-                                  welcome: { ...s.welcome, channelId: val },
-                                }));
-                                setDirty(true);
-                              }}
-                              allowNone={false}
-                              placeholder="Select a channel"
-                            />
-                          </div>
+        <ChannelPicker
+          channels={textChannels}
+          value={settings.welcome?.channelId || ""}
+          disabled={!gateInstalled || channelsLoading}
+          onChange={(val) => {
+            setSettings((s) => ({
+              ...s,
+              welcome: ensureWelcomeDefaults({ ...s.welcome, channelId: val }),
+            }));
+            setDirty(true);
+          }}
+          allowNone={false}
+          placeholder="Select a channel"
+        />
+      </div>
 
-                          {/* Message type selector */}
-                          <div className="woc-card p-4 sm:col-span-2">
-                            <div className="font-semibold text-sm mb-2">Message type</div>
+      {/* Type selector */}
+      <div className="woc-card p-4 sm:col-span-2">
+        <div className="font-semibold text-sm mb-2">Message type</div>
 
-                            <div className="flex flex-wrap gap-2">
-                              {[
-                                ["message", "Message"],
-                                ["embed", "Embed"],
-                                ["embed_text", "Embed + Text"],
-                                ["card", "Card"],
-                              ].map(([val, label]) => (
-                                <button
-                                  key={val}
-                                  type="button"
-                                  onClick={() => {
-                                    setSettings((s) => ({
-                                      ...s,
-                                      welcome: ensureWelcomeDefaults({
-                                        ...s.welcome,
-                                        type: val,
-                                        card: {
-                                          ...(s.welcome?.card || {}),
-                                          enabled: val === "card",
-                                        },
-                                      }),
-                                    }));
-                                    setDirty(true);
-                                    setWelcomePreviewError("");
-                                    setWelcomePreviewBust(Date.now());
-                                  }}
-                                  className={cx(
-                                    "px-3 py-2 rounded-full border text-xs",
-                                    "border-[var(--border-subtle)]/70",
-                                    normalizeWelcomeType(settings.welcome?.type) === val
-                                      ? "bg-[color-mix(in_oklab,var(--accent-soft)_55%,transparent)]"
-                                      : "bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] hover:bg-[color-mix(in_oklab,var(--bg-card)_85%,transparent)]"
-                                  )}
-                                >
-                                  {label}
-                                </button>
-                              ))}
-                            </div>
+        <div className="flex flex-wrap gap-2">
+          {[
+            ["message", "Message"],
+            ["embed", "Embed"],
+            ["embed_text", "Embed + Text"],
+            ["card", "Card"],
+          ].map(([val, label]) => (
+            <button
+              key={val}
+              type="button"
+              onClick={() => {
+                setSettings((s) => ({
+                  ...s,
+                  welcome: ensureWelcomeDefaults({
+                    ...s.welcome,
+                    type: val,
+                    card: {
+                      ...(s.welcome?.card || {}),
+                      enabled: val === "card",
+                    },
+                  }),
+                }));
+                setDirty(true);
+                setWelcomePreviewError("");
+                setWelcomePreviewBust(Date.now());
+              }}
+              className={cx(
+                "px-3 py-2 rounded-full border text-xs",
+                "border-[var(--border-subtle)]/70",
+                normalizeWelcomeType(settings.welcome?.type) === val
+                  ? "bg-[color-mix(in_oklab,var(--accent-soft)_55%,transparent)]"
+                  : "bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] hover:bg-[color-mix(in_oklab,var(--bg-card)_85%,transparent)]"
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
 
-                            <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
-                              Tokens: {"{user}"} {"{mention}"} {"{username}"} {"{user.name}"}{" "}
-                              {"{tag}"} {"{server}"} {"{server.name}"} {"{membercount}"}{" "}
-                              {"{server.member_count}"} {"{id}"} {"{avatar}"}
-                            </div>
-                          </div>
+        <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
+          Tokens: {"{user}"} {"{mention}"} {"{username}"} {"{user.name}"} {"{tag}"}{" "}
+          {"{server}"} {"{server.name}"} {"{membercount}"} {"{server.member_count}"}{" "}
+          {"{id}"} {"{avatar}"}
+        </div>
+      </div>
 
-                          {/* Optional DM */}
-                          <label className="woc-card p-4 sm:col-span-2 flex items-start justify-between gap-3 cursor-pointer">
-                            <div>
-                              <div className="font-semibold text-sm">Send welcome in DM</div>
-                              <div className="text-xs text-[var(--text-muted)] mt-1">
-                                Sends the same welcome payload to the user’s DMs.
-                              </div>
-                            </div>
-                            <input
-                              type="checkbox"
-                              className="mt-1"
-                              checked={!!settings.welcome?.dmEnabled}
-                              onChange={(e) => {
-                                setSettings((s) => ({
-                                  ...s,
-                                  welcome: ensureWelcomeDefaults({
-                                    ...s.welcome,
-                                    dmEnabled: e.target.checked,
-                                  }),
-                                }));
-                                setDirty(true);
-                              }}
-                            />
-                          </label>
+      {/* Optional DM */}
+      <label className="woc-card p-4 sm:col-span-2 flex items-start justify-between gap-3 cursor-pointer">
+        <div>
+          <div className="font-semibold text-sm">Send welcome in DM</div>
+          <div className="text-xs text-[var(--text-muted)] mt-1">
+            Sends the same welcome payload to the user’s DMs.
+          </div>
+        </div>
+        <input
+          type="checkbox"
+          className="mt-1"
+          checked={!!settings.welcome?.dmEnabled}
+          onChange={(e) => {
+            setSettings((s) => ({
+              ...s,
+              welcome: ensureWelcomeDefaults({
+                ...s.welcome,
+                dmEnabled: e.target.checked,
+              }),
+            }));
+            setDirty(true);
+          }}
+        />
+      </label>
 
-                          {/* Text message editor */}
-                          {["message", "embed_text"].includes(
-                            normalizeWelcomeType(settings.welcome?.type)
-                          ) ? (
-                            <label className="woc-card p-4 sm:col-span-2">
-                              <div className="font-semibold text-sm">Welcome message</div>
-                              <div className="text-xs text-[var(--text-muted)] mt-1">
-                                Tokens: <b>{"{user}"}</b>, <b>{"{server}"}</b>,{" "}
-                                <b>{"{membercount}"}</b>, <b>{"{tag}"}</b>
-                              </div>
-                              <textarea
-                                value={settings.welcome?.message || ""}
-                                onChange={(e) => {
-                                  setSettings((s) => ({
-                                    ...s,
-                                    welcome: ensureWelcomeDefaults({
-                                      ...s.welcome,
-                                      message: e.target.value,
-                                    }),
-                                  }));
-                                  setDirty(true);
-                                }}
-                                className="
-                                  mt-3 w-full px-3 py-2 rounded-2xl min-h-[90px]
-                                  border border-[var(--border-subtle)]/70
-                                  bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
-                                  text-[var(--text-main)]
-                                  outline-none
-                                "
-                                placeholder="Welcome {user} to {server}!"
-                              />
-                            </label>
-                          ) : null}
+      {/* Text message editor (message + embed_text) */}
+      {["message", "embed_text"].includes(normalizeWelcomeType(settings.welcome?.type)) ? (
+        <label className="woc-card p-4 sm:col-span-2">
+          <div className="font-semibold text-sm">Welcome message</div>
+          <div className="text-xs text-[var(--text-muted)] mt-1">
+            Used for <b>Message</b> and <b>Embed + Text</b>.
+          </div>
+          <textarea
+            value={settings.welcome?.message || ""}
+            onChange={(e) => {
+              setSettings((s) => ({
+                ...s,
+                welcome: ensureWelcomeDefaults({
+                  ...s.welcome,
+                  message: e.target.value,
+                }),
+              }));
+              setDirty(true);
+            }}
+            className="
+              mt-3 w-full px-3 py-2 rounded-2xl min-h-[90px]
+              border border-[var(--border-subtle)]/70
+              bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+              text-[var(--text-main)]
+              outline-none
+            "
+            placeholder="Welcome {user} to {server}! ✨"
+          />
+        </label>
+      ) : null}
 
-                          {/* Card editor */}
-                          {normalizeWelcomeType(settings.welcome?.type) === "card" ? (
-                            <div className="woc-card p-5 sm:col-span-2">
-                              <div className="font-semibold text-sm">Welcome card</div>
-                              <div className="text-xs text-[var(--text-muted)] mt-1">
-                                Sends a visual-style card (PNG preview powered by your API route).
-                              </div>
+      {/* EMBED BUILDER (embed + embed_text) */}
+      {["embed", "embed_text"].includes(normalizeWelcomeType(settings.welcome?.type)) ? (
+        <div className="woc-card p-5 sm:col-span-2">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="font-semibold text-sm">Embed builder</div>
+              <div className="text-xs text-[var(--text-muted)] mt-1">
+                This builds <code>settings.welcome.embed</code>.
+              </div>
+            </div>
 
-                              <div className="grid gap-3 sm:grid-cols-2 mt-4">
-                                <label className="sm:col-span-2">
-                                  <div className="text-xs mb-1 text-[var(--text-muted)]">
-                                    Background theme (built-in)
-                                  </div>
+            <button
+              type="button"
+              className="woc-btn-ghost text-xs"
+              onClick={() => {
+                setSettings((s) => ({
+                  ...s,
+                  welcome: ensureWelcomeDefaults({
+                    ...s.welcome,
+                    embed: ensureEmbedDefaults(null),
+                  }),
+                }));
+                setDirty(true);
+              }}
+            >
+              Reset embed
+            </button>
+          </div>
 
-                                  <select
-                                    value={settings.welcome?.card?.backgroundUrl || ""}
-                                    onChange={(e) => {
-                                      const next = e.target.value;
+          {(() => {
+            const embed = ensureEmbedDefaults(settings.welcome?.embed);
 
-                                      // ✅ Block premium-only picks if user not premium (or tier too low)
-                                      const premOpt = WELCOME_BG_PREMIUM_OPTIONS.find(
-                                        (o) => o.value === next
-                                      );
-                                      if (premOpt) {
-                                        const required = normalizeTier(
-                                          premOpt.tier || "supporter"
-                                        );
-                                        const allowed =
-                                          premiumActive && hasTier(premiumTier, required);
+            function setEmbed(nextEmbed) {
+              setSettings((s) => ({
+                ...s,
+                welcome: ensureWelcomeDefaults({
+                  ...s.welcome,
+                  embed: ensureEmbedDefaults(nextEmbed),
+                }),
+              }));
+              setDirty(true);
+            }
 
-                                        if (!allowed) {
-                                          showToast(
-                                            `That background needs ${required.replaceAll(
-                                              "_",
-                                              " "
-                                            )} ✨`,
-                                            "omen"
-                                          );
-                                          setWelcomeBgNotice(
-                                            `Locked: "${premOpt.label}" requires ${required.replaceAll(
-                                              "_",
-                                              " "
-                                            )} Premium.`
-                                          );
-                                          return; // don't set
-                                        }
-                                      }
+            return (
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                {/* Left: controls */}
+                <div className="space-y-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="woc-card p-4">
+                      <div className="text-xs text-[var(--text-muted)]">Title</div>
+                      <input
+                        value={embed.title}
+                        onChange={(e) => setEmbed({ ...embed, title: e.target.value })}
+                        className="
+                          mt-2 w-full px-3 py-2 rounded-2xl
+                          border border-[var(--border-subtle)]/70
+                          bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                          text-[var(--text-main)]
+                          outline-none
+                        "
+                        placeholder="Welcome!"
+                      />
+                    </label>
 
-                                      setSettings((s) => ({
-                                        ...s,
-                                        welcome: ensureWelcomeDefaults({
-                                          ...s.welcome,
-                                          card: { ...(s.welcome?.card || {}), backgroundUrl: next },
-                                        }),
-                                      }));
-                                      setDirty(true);
-                                      setWelcomePreviewBust(Date.now());
-                                      setWelcomePreviewError("");
-                                      setWelcomeBgNotice("");
-                                    }}
-                                    className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
-                                  >
-                                    <optgroup label="Free backgrounds">
-                                      {WELCOME_BG_FREE_OPTIONS.map((opt) => (
-                                        <option key={opt.value || "none"} value={opt.value}>
-                                          {opt.label}
-                                        </option>
-                                      ))}
-                                    </optgroup>
+                    <label className="woc-card p-4">
+                      <div className="text-xs text-[var(--text-muted)]">Color (hex)</div>
+                      <input
+                        value={embed.color}
+                        onChange={(e) =>
+                          setEmbed({ ...embed, color: safeHexColor(e.target.value, embed.color) })
+                        }
+                        className="
+                          mt-2 w-full px-3 py-2 rounded-2xl
+                          border border-[var(--border-subtle)]/70
+                          bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                          text-[var(--text-main)]
+                          outline-none
+                        "
+                        placeholder="#7c3aed"
+                      />
+                      <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
+                        Tip: use a full hex like <b>#7c3aed</b>
+                      </div>
+                    </label>
+                  </div>
 
-                                    <optgroup label="Premium packs">
-                                      {WELCOME_BG_PREMIUM_OPTIONS.map((opt) => {
-                                        const required = normalizeTier(opt.tier || "supporter");
-                                        const locked = !(
-                                          premiumActive && hasTier(premiumTier, required)
-                                        );
+                  <label className="woc-card p-4">
+                    <div className="text-xs text-[var(--text-muted)]">Description</div>
+                    <textarea
+                      value={embed.description}
+                      onChange={(e) => setEmbed({ ...embed, description: e.target.value })}
+                      className="
+                        mt-2 w-full px-3 py-2 rounded-2xl min-h-[90px]
+                        border border-[var(--border-subtle)]/70
+                        bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                        text-[var(--text-main)]
+                        outline-none
+                      "
+                      placeholder="Welcome {user} to **{server}**!"
+                    />
+                  </label>
 
-                                        return (
-                                          <option key={opt.value} value={opt.value} disabled={locked}>
-                                            {locked
-                                              ? `🔒 ${opt.label} (requires ${required.replaceAll(
-                                                  "_",
-                                                  " "
-                                                )})`
-                                              : opt.label}
-                                          </option>
-                                        );
-                                      })}
-                                    </optgroup>
-                                  </select>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="woc-card p-4">
+                      <div className="text-xs text-[var(--text-muted)]">Embed URL (optional)</div>
+                      <input
+                        value={embed.url}
+                        onChange={(e) => setEmbed({ ...embed, url: e.target.value })}
+                        className="
+                          mt-2 w-full px-3 py-2 rounded-2xl
+                          border border-[var(--border-subtle)]/70
+                          bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                          text-[var(--text-main)]
+                          outline-none
+                        "
+                        placeholder="https://..."
+                      />
+                    </label>
 
-                                  {!premiumActive ? (
-                                    <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
-                                      Premium packs are locked.{" "}
-                                      <Link className="underline" href="/premium">
-                                        Unlock backgrounds ✨
-                                      </Link>
-                                    </div>
-                                  ) : (
-                                    <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
-                                      Tip: Put images in <b>/public/welcome-backgrounds/</b> so they always work.
-                                    </div>
-                                  )}
-                                </label>
-                              </div>
-                            </div>
-                          ) : null}
+                    <label className="woc-card p-4">
+                      <div className="text-xs text-[var(--text-muted)]">Thumbnail URL</div>
+                      <input
+                        value={embed.thumbnailUrl}
+                        onChange={(e) => setEmbed({ ...embed, thumbnailUrl: e.target.value })}
+                        className="
+                          mt-2 w-full px-3 py-2 rounded-2xl
+                          border border-[var(--border-subtle)]/70
+                          bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                          text-[var(--text-main)]
+                          outline-none
+                        "
+                        placeholder="{avatar}"
+                      />
+                    </label>
+                  </div>
+
+                  <label className="woc-card p-4">
+                    <div className="text-xs text-[var(--text-muted)]">Image URL (optional)</div>
+                    <input
+                      value={embed.imageUrl}
+                      onChange={(e) => setEmbed({ ...embed, imageUrl: e.target.value })}
+                      className="
+                        mt-2 w-full px-3 py-2 rounded-2xl
+                        border border-[var(--border-subtle)]/70
+                        bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                        text-[var(--text-main)]
+                        outline-none
+                      "
+                      placeholder="https://..."
+                    />
+                  </label>
+
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <label className="woc-card p-4 sm:col-span-1">
+                      <div className="text-xs text-[var(--text-muted)]">Author name</div>
+                      <input
+                        value={embed.author?.name || ""}
+                        onChange={(e) =>
+                          setEmbed({
+                            ...embed,
+                            author: { ...(embed.author || {}), name: e.target.value },
+                          })
+                        }
+                        className="
+                          mt-2 w-full px-3 py-2 rounded-2xl
+                          border border-[var(--border-subtle)]/70
+                          bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                          text-[var(--text-main)]
+                          outline-none
+                        "
+                        placeholder="{server}"
+                      />
+                    </label>
+
+                    <label className="woc-card p-4 sm:col-span-1">
+                      <div className="text-xs text-[var(--text-muted)]">Author icon</div>
+                      <input
+                        value={embed.author?.iconUrl || ""}
+                        onChange={(e) =>
+                          setEmbed({
+                            ...embed,
+                            author: { ...(embed.author || {}), iconUrl: e.target.value },
+                          })
+                        }
+                        className="
+                          mt-2 w-full px-3 py-2 rounded-2xl
+                          border border-[var(--border-subtle)]/70
+                          bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                          text-[var(--text-main)]
+                          outline-none
+                        "
+                        placeholder="https://..."
+                      />
+                    </label>
+
+                    <label className="woc-card p-4 sm:col-span-1">
+                      <div className="text-xs text-[var(--text-muted)]">Author URL</div>
+                      <input
+                        value={embed.author?.url || ""}
+                        onChange={(e) =>
+                          setEmbed({
+                            ...embed,
+                            author: { ...(embed.author || {}), url: e.target.value },
+                          })
+                        }
+                        className="
+                          mt-2 w-full px-3 py-2 rounded-2xl
+                          border border-[var(--border-subtle)]/70
+                          bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                          text-[var(--text-main)]
+                          outline-none
+                        "
+                        placeholder="https://..."
+                      />
+                    </label>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="woc-card p-4">
+                      <div className="text-xs text-[var(--text-muted)]">Footer text</div>
+                      <input
+                        value={embed.footer?.text || ""}
+                        onChange={(e) =>
+                          setEmbed({
+                            ...embed,
+                            footer: { ...(embed.footer || {}), text: e.target.value },
+                          })
+                        }
+                        className="
+                          mt-2 w-full px-3 py-2 rounded-2xl
+                          border border-[var(--border-subtle)]/70
+                          bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                          text-[var(--text-main)]
+                          outline-none
+                        "
+                        placeholder="Member #{membercount}"
+                      />
+                    </label>
+
+                    <label className="woc-card p-4">
+                      <div className="text-xs text-[var(--text-muted)]">Footer icon</div>
+                      <input
+                        value={embed.footer?.iconUrl || ""}
+                        onChange={(e) =>
+                          setEmbed({
+                            ...embed,
+                            footer: { ...(embed.footer || {}), iconUrl: e.target.value },
+                          })
+                        }
+                        className="
+                          mt-2 w-full px-3 py-2 rounded-2xl
+                          border border-[var(--border-subtle)]/70
+                          bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                          text-[var(--text-main)]
+                          outline-none
+                        "
+                        placeholder="https://..."
+                      />
+                    </label>
+                  </div>
+
+                  {/* Fields */}
+                  <div className="woc-card p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="font-semibold text-sm">Fields</div>
+                        <div className="text-xs text-[var(--text-muted)] mt-1">
+                          Up to 25 fields.
                         </div>
                       </div>
+
+                      <button
+                        type="button"
+                        className="woc-btn-ghost text-xs"
+                        onClick={() => {
+                          const next = ensureEmbedDefaults(embed);
+                          if (next.fields.length >= 25) return;
+                          next.fields.push({
+                            name: "Field title",
+                            value: "Field value",
+                            inline: false,
+                          });
+                          setEmbed(next);
+                        }}
+                      >
+                        + Add field
+                      </button>
+                    </div>
+
+                    {embed.fields.length ? (
+                      <div className="mt-3 space-y-3">
+                        {embed.fields.map((f, idx) => (
+                          <div
+                            key={idx}
+                            className="rounded-2xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_75%,transparent)] p-3"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="text-xs font-semibold">Field {idx + 1}</div>
+                              <button
+                                type="button"
+                                className="text-xs text-rose-200 hover:underline"
+                                onClick={() => {
+                                  const next = ensureEmbedDefaults(embed);
+                                  next.fields.splice(idx, 1);
+                                  setEmbed(next);
+                                }}
+                              >
+                                Remove
+                              </button>
+                            </div>
+
+                            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                              <label>
+                                <div className="text-[0.72rem] text-[var(--text-muted)]">
+                                  Name
+                                </div>
+                                <input
+                                  value={f.name}
+                                  onChange={(e) => {
+                                    const next = ensureEmbedDefaults(embed);
+                                    next.fields[idx] = { ...next.fields[idx], name: e.target.value };
+                                    setEmbed(next);
+                                  }}
+                                  className="
+                                    mt-1 w-full px-3 py-2 rounded-2xl
+                                    border border-[var(--border-subtle)]/70
+                                    bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                                    text-[var(--text-main)]
+                                    outline-none
+                                  "
+                                />
+                              </label>
+
+                              <label>
+                                <div className="text-[0.72rem] text-[var(--text-muted)]">
+                                  Value
+                                </div>
+                                <input
+                                  value={f.value}
+                                  onChange={(e) => {
+                                    const next = ensureEmbedDefaults(embed);
+                                    next.fields[idx] = { ...next.fields[idx], value: e.target.value };
+                                    setEmbed(next);
+                                  }}
+                                  className="
+                                    mt-1 w-full px-3 py-2 rounded-2xl
+                                    border border-[var(--border-subtle)]/70
+                                    bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                                    text-[var(--text-main)]
+                                    outline-none
+                                  "
+                                />
+                              </label>
+
+                              <label className="inline-flex items-center gap-2 mt-2">
+                                <input
+                                  type="checkbox"
+                                  checked={!!f.inline}
+                                  onChange={(e) => {
+                                    const next = ensureEmbedDefaults(embed);
+                                    next.fields[idx] = { ...next.fields[idx], inline: e.target.checked };
+                                    setEmbed(next);
+                                  }}
+                                />
+                                <span className="text-[0.78rem] text-[var(--text-muted)]">
+                                  Inline
+                                </span>
+                              </label>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-3 text-xs text-[var(--text-muted)]">
+                        No fields yet.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Right: preview */}
+                <div className="space-y-3">
+                  <EmbedPreview embed={embed} />
+
+                  <div className="rounded-2xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] p-4">
+                    <div className="text-xs text-[var(--text-muted)] mb-2">
+                      Raw embed JSON (for sanity)
+                    </div>
+                    <pre className="text-[0.72rem] overflow-auto whitespace-pre-wrap break-words text-[var(--text-muted)]">
+                      {JSON.stringify(embed, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      ) : null}
+
+      {/* CARD BUILDER (card) */}
+      {normalizeWelcomeType(settings.welcome?.type) === "card" ? (
+        <div className="woc-card p-5 sm:col-span-2">
+          <div className="font-semibold text-sm">Welcome card</div>
+          <div className="text-xs text-[var(--text-muted)] mt-1">
+            PNG preview powered by your route:{" "}
+            <code>/api/guilds/[guildId]/welcome-card.png</code>
+          </div>
+
+          {(() => {
+            const card = ensureCardDefaults(settings.welcome?.card);
+
+            function setCard(nextCard) {
+              setSettings((s) => ({
+                ...s,
+                welcome: ensureWelcomeDefaults({
+                  ...s.welcome,
+                  card: ensureCardDefaults(nextCard),
+                  type: "card",
+                }),
+              }));
+              setDirty(true);
+              setWelcomePreviewBust(Date.now());
+              setWelcomePreviewError("");
+            }
+
+            return (
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                <div className="space-y-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="woc-card p-4">
+                      <div className="text-xs text-[var(--text-muted)]">Title</div>
+                      <input
+                        value={card.title}
+                        onChange={(e) => setCard({ ...card, title: e.target.value })}
+                        className="
+                          mt-2 w-full px-3 py-2 rounded-2xl
+                          border border-[var(--border-subtle)]/70
+                          bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                          text-[var(--text-main)]
+                          outline-none
+                        "
+                      />
+                    </label>
+
+                    <label className="woc-card p-4">
+                      <div className="text-xs text-[var(--text-muted)]">Subtitle</div>
+                      <input
+                        value={card.subtitle}
+                        onChange={(e) => setCard({ ...card, subtitle: e.target.value })}
+                        className="
+                          mt-2 w-full px-3 py-2 rounded-2xl
+                          border border-[var(--border-subtle)]/70
+                          bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                          text-[var(--text-main)]
+                          outline-none
+                        "
+                      />
+                    </label>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <label className="woc-card p-4 sm:col-span-1">
+                      <div className="text-xs text-[var(--text-muted)]">Background</div>
+                      <input
+                        value={card.backgroundColor}
+                        onChange={(e) => setCard({ ...card, backgroundColor: e.target.value })}
+                        className="
+                          mt-2 w-full px-3 py-2 rounded-2xl
+                          border border-[var(--border-subtle)]/70
+                          bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                          text-[var(--text-main)]
+                          outline-none
+                        "
+                        placeholder="#0b1020"
+                      />
+                    </label>
+
+                    <label className="woc-card p-4 sm:col-span-1">
+                      <div className="text-xs text-[var(--text-muted)]">Text</div>
+                      <input
+                        value={card.textColor}
+                        onChange={(e) => setCard({ ...card, textColor: e.target.value })}
+                        className="
+                          mt-2 w-full px-3 py-2 rounded-2xl
+                          border border-[var(--border-subtle)]/70
+                          bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                          text-[var(--text-main)]
+                          outline-none
+                        "
+                        placeholder="#ffffff"
+                      />
+                    </label>
+
+                    <label className="woc-card p-4 sm:col-span-1">
+                      <div className="text-xs text-[var(--text-muted)]">Overlay</div>
+                      <input
+                        type="number"
+                        step="0.05"
+                        min="0"
+                        max="0.85"
+                        value={card.overlayOpacity}
+                        onChange={(e) =>
+                          setCard({ ...card, overlayOpacity: clampNum(e.target.value, 0, 0.85) })
+                        }
+                        className="
+                          mt-2 w-full px-3 py-2 rounded-2xl
+                          border border-[var(--border-subtle)]/70
+                          bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+                          text-[var(--text-main)]
+                          outline-none
+                        "
+                      />
+                    </label>
+                  </div>
+
+                  <label className="woc-card p-4">
+                    <div className="text-xs text-[var(--text-muted)]">Background image URL/path</div>
+                    <select
+                      value={card.backgroundUrl || ""}
+                      onChange={(e) => {
+                        const next = e.target.value;
+
+                        const premOpt = WELCOME_BG_PREMIUM_OPTIONS.find((o) => o.value === next);
+                        if (premOpt) {
+                          const required = normalizeTier(premOpt.tier || "supporter");
+                          const allowed = premiumActive && hasTier(premiumTier, required);
+
+                          if (!allowed) {
+                            showToast(
+                              `That background needs ${required.replaceAll("_", " ")} ✨`,
+                              "omen"
+                            );
+                            setWelcomeBgNotice(
+                              `Locked: "${premOpt.label}" requires ${required.replaceAll("_", " ")} Premium.`
+                            );
+                            return;
+                          }
+                        }
+
+                        setCard({ ...card, backgroundUrl: next });
+                        setWelcomeBgNotice("");
+                      }}
+                      className="w-full mt-2 px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
+                    >
+                      <optgroup label="Free backgrounds">
+                        {WELCOME_BG_FREE_OPTIONS.map((opt) => (
+                          <option key={opt.value || "none"} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </optgroup>
+
+                      <optgroup label="Premium packs">
+                        {WELCOME_BG_PREMIUM_OPTIONS.map((opt) => {
+                          const required = normalizeTier(opt.tier || "supporter");
+                          const locked = !(premiumActive && hasTier(premiumTier, required));
+
+                          return (
+                            <option key={opt.value} value={opt.value} disabled={locked}>
+                              {locked
+                                ? `🔒 ${opt.label} (requires ${required.replaceAll("_", " ")})`
+                                : opt.label}
+                            </option>
+                          );
+                        })}
+                      </optgroup>
+                    </select>
+
+                    {welcomeBgNotice ? (
+                      <div className="mt-2 text-[0.72rem] text-amber-200/90">
+                        {welcomeBgNotice}
+                      </div>
                     ) : null}
+
+                    {!premiumActive ? (
+                      <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
+                        Premium packs are locked.{" "}
+                        <Link className="underline" href="/premium">
+                          Unlock backgrounds ✨
+                        </Link>
+                      </div>
+                    ) : (
+                      <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
+                        Tip: put files in <b>/public/welcome-backgrounds/</b> so they always work.
+                      </div>
+                    )}
+                  </label>
+
+                  <label className="woc-card p-4 flex items-center justify-between gap-3">
+                    <div>
+                      <div className="font-semibold text-sm">Show avatar</div>
+                      <div className="text-xs text-[var(--text-muted)] mt-1">
+                        Displays the joining user’s avatar on the card.
+                      </div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={card.showAvatar !== false}
+                      onChange={(e) => setCard({ ...card, showAvatar: e.target.checked })}
+                    />
+                  </label>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="woc-card p-4">
+                    <div className="text-xs text-[var(--text-muted)] mb-2">Live preview</div>
+
+                    {welcomeCardPreviewUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={welcomeCardPreviewUrl}
+                        alt="Welcome card preview"
+                        className="w-full rounded-2xl border border-[var(--border-subtle)]/70"
+                        onError={() => setWelcomePreviewError("Preview failed to load.")}
+                        onLoad={() => setWelcomePreviewError("")}
+                      />
+                    ) : (
+                      <div className="text-xs text-[var(--text-muted)]">
+                        Preview not available (check: installed + card mode + guild selected).
+                      </div>
+                    )}
+
+                    {welcomePreviewError ? (
+                      <div className="mt-2 text-xs text-rose-200/90">
+                        {welcomePreviewError}
+                      </div>
+                    ) : null}
+
+                    <button
+                      type="button"
+                      className="mt-3 woc-btn-ghost text-xs"
+                      onClick={() => setWelcomePreviewBust(Date.now())}
+                    >
+                      Refresh preview 🔄
+                    </button>
+                  </div>
+
+                  <div className="rounded-2xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] p-4">
+                    <div className="text-xs text-[var(--text-muted)] mb-2">
+                      Raw card JSON
+                    </div>
+                    <pre className="text-[0.72rem] overflow-auto whitespace-pre-wrap break-words text-[var(--text-muted)]">
+                      {JSON.stringify(card, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      ) : null}
+
+      {/* Autorole */}
+      <div className="woc-card p-4 sm:col-span-2">
+        <div className="font-semibold text-sm">Auto-role (optional)</div>
+        <div className="text-xs text-[var(--text-muted)] mt-1">
+          Role ID to auto-assign when someone joins.
+        </div>
+        <input
+          value={settings.welcome?.autoRoleId || ""}
+          onChange={(e) => {
+            setSettings((s) => ({
+              ...s,
+              welcome: ensureWelcomeDefaults({
+                ...s.welcome,
+                autoRoleId: e.target.value,
+              }),
+            }));
+            setDirty(true);
+          }}
+          className="
+            mt-3 w-full px-3 py-2 rounded-2xl
+            border border-[var(--border-subtle)]/70
+            bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)]
+            text-[var(--text-main)]
+            outline-none
+          "
+          placeholder="123456789012345678"
+        />
+      </div>
+    </div>
+  </div>
+) : null}
+
 
                     {/* ACTION LOG */}
                     {subtab === "actionlog" ? (
