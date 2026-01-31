@@ -46,12 +46,12 @@ function hasTier(currentTier, minTier) {
 const WELCOME_BG_FREE_OPTIONS = [
   { label: "None (use gradient only)", value: "" },
 
-  { label: "⚫ Black (Free)", value: "/welcome-backgrounds/Black.png" },
-  { label: "🔵 BlueRed (Free)", value: "/welcome-backgrounds/BlueRed.png" },
-  { label: "🌑 DarkBlue (Free)", value: "/welcome-backgrounds/DarkBlue.png" },
-  { label: "🧊 LightBlue (Free)", value: "/welcome-backgrounds/LightBlue.png" },
-  { label: "🔴 Red (Free)", value: "/welcome-backgrounds/Red.png" },
-  { label: "🟡 YellowRed (Free)", value: "/welcome-backgrounds/YellowRed.png" },
+  { label: "⚫ Black (Free)", value: "/welcome-backgrounds/free/Black.png" },
+  { label: "🔵 BlueRed (Free)", value: "/welcome-backgrounds/free/BlueRed.png" },
+  { label: "🌑 DarkBlue (Free)", value: "/welcome-backgrounds/free/DarkBlue.png" },
+  { label: "🧊 LightBlue (Free)", value: "/welcome-backgrounds/free/LightBlue.png" },
+  { label: "🔴 Red (Free)", value: "/welcome-backgrounds/free/Red.png" },
+  { label: "🟡 YellowRed (Free)", value: "/welcome-backgrounds/free/YellowRed.png" },
 ];
 
 // Premium packs. You can rename paths, just keep them in /public.
