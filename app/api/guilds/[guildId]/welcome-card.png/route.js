@@ -92,7 +92,7 @@ async function fetchAsDataUriWithStatus(remoteUrl) {
   }
 }
 
-async function localPublicAsDataUri(relPathFromPublic) {
+async function readPublicFileAsDataUri(relPathFromPublic) {
   const rel = String(relPathFromPublic || "").replace(/^\/+/, "");
   if (!rel) return null;
 
@@ -106,6 +106,75 @@ async function localPublicAsDataUri(relPathFromPublic) {
   } catch {
     return null;
   }
+}
+
+// ✅ Try common extensions for ID-like values (e.g. "rough_paper")
+async function tryResolveWelcomeBackground(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return { kind: "none", resolved: "", dataUri: null, status: "none" };
+
+  // Normalize Windows backslashes just in case someone pasted them
+  const s = raw.replaceAll("\\", "/");
+
+  // Already a local public path?
+  if (s.startsWith("/")) {
+    const dataUri = await readPublicFileAsDataUri(s);
+    return {
+      kind: "local",
+      resolved: s,
+      dataUri,
+      status: dataUri ? "ok" : "fetch_failed",
+    };
+  }
+
+  // Looks like a URL?
+  if (/^https?:\/\//i.test(s)) {
+    return { kind: "remote", resolved: s, dataUri: null, status: "unknown" };
+  }
+
+  // Missing leading slash but contains a folder (e.g. "welcome-backgrounds/x.png")
+  if (s.includes("/")) {
+    const asLocal = `/${s.replace(/^\/+/, "")}`;
+    const dataUri = await readPublicFileAsDataUri(asLocal);
+    return {
+      kind: "local",
+      resolved: asLocal,
+      dataUri,
+      status: dataUri ? "ok" : "fetch_failed",
+    };
+  }
+
+  // Filename with extension? assume /welcome-backgrounds/
+  if (/\.(png|jpg|jpeg|webp|gif)$/i.test(s)) {
+    const asLocal = `/welcome-backgrounds/${s}`;
+    const dataUri = await readPublicFileAsDataUri(asLocal);
+    return {
+      kind: "local",
+      resolved: asLocal,
+      dataUri,
+      status: dataUri ? "ok" : "fetch_failed",
+    };
+  }
+
+  // ID-like value: try common extensions in /welcome-backgrounds/
+  const base = s;
+  const candidates = [
+    `/welcome-backgrounds/${base}.png`,
+    `/welcome-backgrounds/${base}.webp`,
+    `/welcome-backgrounds/${base}.jpg`,
+    `/welcome-backgrounds/${base}.jpeg`,
+    `/welcome-backgrounds/${base}.gif`,
+  ];
+
+  for (const p of candidates) {
+    // eslint-disable-next-line no-await-in-loop
+    const dataUri = await readPublicFileAsDataUri(p);
+    if (dataUri) {
+      return { kind: "local", resolved: p, dataUri, status: "ok" };
+    }
+  }
+
+  return { kind: "local", resolved: `/welcome-backgrounds/${base}.*`, dataUri: null, status: "fetch_failed" };
 }
 
 function fitFontSize(text, maxWidthPx, baseSize, minSize) {
@@ -131,7 +200,14 @@ export async function GET(req, { params }) {
       if (guildId) {
         await dbConnect();
         const settings = await GuildSettings.findOne({ guildId }).lean();
-        const wc = settings?.welcomeCard || settings?.modules?.welcomeCard || null;
+
+        // ✅ Your dashboard stores welcome under settings.welcome.card.*
+        // But we also support older shapes so nothing breaks.
+        const wc =
+          settings?.welcome?.card ||
+          settings?.welcomeCard ||
+          settings?.modules?.welcomeCard ||
+          null;
 
         if (wc && typeof wc === "object") {
           dbDefaults = {
@@ -156,17 +232,53 @@ export async function GET(req, { params }) {
       dbDefaults.backgroundUrl ||
       "";
 
-    // Do background check first so meta mode can return fast
+    // ✅ Robust background resolution
     let bgData = null;
     let bgStatus = "none";
+    let bgKind = "none";
+    let bgResolved = "";
+
     if (backgroundUrlRaw) {
-      if (backgroundUrlRaw.startsWith("/")) {
-        bgData = await localPublicAsDataUri(backgroundUrlRaw);
-        bgStatus = bgData ? "ok" : "fetch_failed";
+      // If it's a URL and same-origin, treat as local public file (more reliable than fetching yourself)
+      if (/^https?:\/\//i.test(backgroundUrlRaw)) {
+        try {
+          const reqHost = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
+          const reqProto = req.headers.get("x-forwarded-proto") || "https";
+          const origin = reqHost ? `${reqProto}://${reqHost}` : url.origin;
+
+          const parsed = new URL(backgroundUrlRaw);
+          const isSameOrigin = parsed.origin === origin;
+
+          if (isSameOrigin) {
+            const localPath = parsed.pathname || "";
+            const dataUri = await readPublicFileAsDataUri(localPath);
+            bgKind = "local";
+            bgResolved = localPath;
+            bgData = dataUri;
+            bgStatus = dataUri ? "ok" : "fetch_failed";
+          } else {
+            const bgRes = await fetchAsDataUriWithStatus(backgroundUrlRaw);
+            bgKind = "remote";
+            bgResolved = backgroundUrlRaw;
+            bgData = bgRes.dataUri;
+            bgStatus = bgRes.status;
+          }
+        } catch {
+          const bgRes = await fetchAsDataUriWithStatus(backgroundUrlRaw);
+          bgKind = "remote";
+          bgResolved = backgroundUrlRaw;
+          bgData = bgRes.dataUri;
+          bgStatus = bgRes.status;
+        }
       } else {
-        const bgRes = await fetchAsDataUriWithStatus(backgroundUrlRaw);
-        bgData = bgRes.dataUri;
-        bgStatus = bgRes.status;
+        // Not a URL: resolve it as a local welcome background (supports ids / filenames / missing slashes)
+        const resolved = await tryResolveWelcomeBackground(backgroundUrlRaw);
+        bgKind = resolved.kind;
+        bgResolved = resolved.resolved;
+        bgData = resolved.dataUri;
+        bgStatus = resolved.status;
+
+        // If it wasn't resolvable locally but actually looks like a remote URL without protocol (rare), you can add logic here.
       }
     }
 
@@ -175,7 +287,9 @@ export async function GET(req, { params }) {
         ok: true,
         background: {
           input: backgroundUrlRaw || "",
-          status: bgStatus, // ok | blocked_html | fetch_failed | none
+          kind: bgKind,          // local | remote | none
+          resolved: bgResolved,  // resolved local path or URL
+          status: bgStatus,      // ok | blocked_html | fetch_failed | none
         },
       });
     }
@@ -218,7 +332,9 @@ export async function GET(req, { params }) {
     const subtitleSize = fitFontSize(secondaryLineText, maxTextWidth, 22, 16);
 
     const [avatarRes, iconRes] = await Promise.all([
-      showAvatar ? fetchAsDataUriWithStatus(avatarUrl) : Promise.resolve({ dataUri: null, status: "none" }),
+      showAvatar
+        ? fetchAsDataUriWithStatus(avatarUrl)
+        : Promise.resolve({ dataUri: null, status: "none" }),
       fetchAsDataUriWithStatus(serverIconUrl),
     ]);
 
@@ -303,6 +419,8 @@ export async function GET(req, { params }) {
         "Content-Type": "image/png",
         "Cache-Control": "no-store",
         "X-WoC-Background-Status": bgStatus,
+        "X-WoC-Background-Kind": bgKind,
+        "X-WoC-Background-Resolved": encodeURIComponent(bgResolved || ""),
       },
     });
   } catch (err) {
