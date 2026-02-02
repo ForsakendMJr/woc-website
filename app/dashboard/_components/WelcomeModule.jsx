@@ -6,7 +6,7 @@ import Link from "next/link";
 const WELCOME_CARD_PNG_ENDPOINT = (gid) =>
   `/api/guilds/${encodeURIComponent(gid)}/welcome-card.png`;
 
-const PREMIUM_TIERS = ["free", "supporter", "supporter_plus", "supporter_plus_plus"];
+const PREMIUM_TIERS = ["free", "supporter", "supporter_plus"];
 
 function normalizeTier(t) {
   const x = String(t || "free").trim().toLowerCase();
@@ -172,6 +172,7 @@ function buildWelcomeCardPreviewUrl({
   params.set("showAvatar", showAvatar ? "true" : "false");
   if (backgroundUrl) params.set("backgroundUrl", backgroundUrl);
 
+  // Bust cache ALWAYS changes preview URL
   params.set("_", String(bust || Date.now()));
   return `${WELCOME_CARD_PNG_ENDPOINT(guildId)}?${params.toString()}`;
 }
@@ -214,16 +215,13 @@ export default function WelcomeModule({
     });
   }, [channels]);
 
-
-function absolutizeMaybeLocalUrl(u) {
-  const s = String(u || "").trim();
-  if (!s) return "";
-  if (/^https?:\/\//i.test(s)) return s; // already absolute
-  if (s.startsWith("/") && typeof window !== "undefined") return `${window.location.origin}${s}`;
-  return s;
-}
-
-
+  function absolutizeMaybeLocalUrl(u) {
+    const s = String(u || "").trim();
+    if (!s) return "";
+    if (/^https?:\/\//i.test(s)) return s; // already absolute
+    if (s.startsWith("/") && typeof window !== "undefined") return `${window.location.origin}${s}`;
+    return s;
+  }
 
   function setWelcome(patch) {
     const next = deepClone(settings || {});
@@ -247,13 +245,49 @@ function absolutizeMaybeLocalUrl(u) {
     onChange(next);
   }
 
+  // ✅ THE IMPORTANT FIX:
+  // A dedicated setter that writes backgroundUrl without being clobbered,
+  // ensures card mode, passes premium gating, and forces preview refresh.
+  function setCardBackground(nextVal) {
+    const nextBg = String(nextVal || "");
+
+    // Premium gating
+    const premOpt = (premiumBackgrounds || []).find((o) => o.value === nextBg);
+    if (premOpt) {
+      const required = normalizeTier(premOpt.tier || "supporter");
+      const allowed = premiumActive && hasTier(premiumTier, required);
+      if (!allowed) {
+        setBgNotice(
+          `Locked: "${premOpt.label}" requires ${required.replaceAll("_", " ")} Premium.`
+        );
+        return;
+      }
+    }
+
+    setBgNotice("");
+
+    const s2 = deepClone(settings || {});
+    const w2 = ensureWelcomeDefaults(s2.welcome);
+
+    // Force it to be card mode and enabled, so UI + preview agree
+    w2.type = "card";
+    w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
+
+    s2.welcome = w2;
+    onChange(s2);
+
+    setPreviewError("");
+    setMetaStatus("");
+    setPreviewBust(Date.now());
+  }
+
   const previewUrl = useMemo(() => {
     if (type !== "card") return "";
     if (!guildOk) return "";
 
     const card = ensureWelcomeDefaults(welcome).card;
 
-    // Premium background gating (if provided)
+    // Premium background gating for preview
     const rawBg = String(card?.backgroundUrl || "");
     const premOpt = (premiumBackgrounds || []).find((o) => o.value === rawBg);
 
@@ -309,7 +343,6 @@ function absolutizeMaybeLocalUrl(u) {
 
     (async () => {
       try {
-        // ✅ IMPORTANT: previewUrl is relative, so give URL a base
         const u = new URL(previewUrl, window.location.origin);
         u.searchParams.set("meta", "1");
 
@@ -554,7 +587,9 @@ function absolutizeMaybeLocalUrl(u) {
                       value={welcome?.embed?.author?.name || ""}
                       disabled={!guildOk}
                       onChange={(e) =>
-                        setEmbed({ author: { ...(welcome?.embed?.author || {}), name: e.target.value } })
+                        setEmbed({
+                          author: { ...(welcome?.embed?.author || {}), name: e.target.value },
+                        })
                       }
                       className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
                       placeholder="{server}"
@@ -580,7 +615,9 @@ function absolutizeMaybeLocalUrl(u) {
                       value={welcome?.embed?.author?.url || ""}
                       disabled={!guildOk}
                       onChange={(e) =>
-                        setEmbed({ author: { ...(welcome?.embed?.author || {}), url: e.target.value } })
+                        setEmbed({
+                          author: { ...(welcome?.embed?.author || {}), url: e.target.value },
+                        })
                       }
                       className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
                       placeholder="https://..."
@@ -598,7 +635,9 @@ function absolutizeMaybeLocalUrl(u) {
                       value={welcome?.embed?.footer?.text || ""}
                       disabled={!guildOk}
                       onChange={(e) =>
-                        setEmbed({ footer: { ...(welcome?.embed?.footer || {}), text: e.target.value } })
+                        setEmbed({
+                          footer: { ...(welcome?.embed?.footer || {}), text: e.target.value },
+                        })
                       }
                       className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
                       placeholder="Member #{membercount}"
@@ -630,7 +669,10 @@ function absolutizeMaybeLocalUrl(u) {
                   <button
                     type="button"
                     disabled={!guildOk || (welcome?.embed?.fields || []).length >= 25}
-                    className={cx("woc-btn-ghost text-xs", !guildOk ? "opacity-60 cursor-not-allowed" : "")}
+                    className={cx(
+                      "woc-btn-ghost text-xs",
+                      !guildOk ? "opacity-60 cursor-not-allowed" : ""
+                    )}
                     onClick={() => {
                       const nextFields = [...(welcome?.embed?.fields || [])];
                       if (nextFields.length >= 25) return;
@@ -650,7 +692,10 @@ function absolutizeMaybeLocalUrl(u) {
                         <button
                           type="button"
                           disabled={!guildOk}
-                          className={cx("woc-btn-ghost text-xs", !guildOk ? "opacity-60 cursor-not-allowed" : "")}
+                          className={cx(
+                            "woc-btn-ghost text-xs",
+                            !guildOk ? "opacity-60 cursor-not-allowed" : ""
+                          )}
                           onClick={() => {
                             const nextFields = [...(welcome?.embed?.fields || [])];
                             nextFields.splice(idx, 1);
@@ -684,7 +729,10 @@ function absolutizeMaybeLocalUrl(u) {
                             checked={!!f?.inline}
                             onChange={(e) => {
                               const nextFields = [...(welcome?.embed?.fields || [])];
-                              nextFields[idx] = { ...(nextFields[idx] || {}), inline: e.target.checked };
+                              nextFields[idx] = {
+                                ...(nextFields[idx] || {}),
+                                inline: e.target.checked,
+                              };
                               setEmbed({ fields: nextFields });
                             }}
                           />
@@ -833,27 +881,7 @@ function absolutizeMaybeLocalUrl(u) {
                 <select
                   value={welcome?.card?.backgroundUrl || ""}
                   disabled={!guildOk}
-                  onChange={(e) => {
-                    const nextVal = e.target.value;
-
-                    const premOpt = (premiumBackgrounds || []).find((o) => o.value === nextVal);
-                    if (premOpt) {
-                      const required = normalizeTier(premOpt.tier || "supporter");
-                      const allowed = premiumActive && hasTier(premiumTier, required);
-
-                      if (!allowed) {
-                        setBgNotice(
-                          `Locked: "${premOpt.label}" requires ${required.replaceAll("_", " ")} Premium.`
-                        );
-                        return;
-                      }
-                    }
-
-                    setBgNotice("");
-                    setCard({ backgroundUrl: nextVal });
-                    setPreviewBust(Date.now());
-                    setPreviewError("");
-                  }}
+                  onChange={(e) => setCardBackground(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
                 >
                   <optgroup label="Free backgrounds">
@@ -921,6 +949,15 @@ function absolutizeMaybeLocalUrl(u) {
                       }
                       onLoad={() => setPreviewError("")}
                     />
+
+                    {/* ✅ Debug line (remove anytime) */}
+                    <div className="mt-2 text-[0.72rem] text-[var(--text-muted)]">
+                      Selected BG: <b>{welcome?.card?.backgroundUrl || "(none)"}</b>
+                      {" • "}
+                      Tier: <b>{String(premiumTier)}</b>
+                      {" • "}
+                      Premium: <b>{premiumActive ? "yes" : "no"}</b>
+                    </div>
 
                     {metaStatus ? (
                       <div className="mt-3 text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
