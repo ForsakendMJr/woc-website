@@ -34,11 +34,13 @@ function normalizeTier(t) {
   return PREMIUM_TIERS.includes(x) ? x : "free";
 }
 function tierRank(t) {
-  return Math.max(0, PREMIUM_TIERS.indexOf(normalizeTier(t)));
+  return Math.max(0, PREMIUM_TIERS.indexOf(t));
 }
+
 function hasTier(currentTier, minTier) {
   return tierRank(currentTier) >= tierRank(minTier);
 }
+
 
 
 // ✅ Welcome Card Background Options (Free + Premium packs)
@@ -56,35 +58,33 @@ const WELCOME_BG_FREE_OPTIONS = [
 
 // Premium packs. You can rename paths, just keep them in /public.
 const WELCOME_BG_PREMIUM_OPTIONS = [
-
   {
     label: "🌸 Metallic",
     value: "/welcome-backgrounds/premium/Metallic.png",
-    tier: "supporter",
+    tier: "supporter", // ALL tiers can access
   },
   {
     label: "🌸 Rough Paper",
     value: "/welcome-backgrounds/premium/RoughPaper.png",
-    tier: "supporter",
+    tier: "supporter", // ALL tiers can access
   },
-
   {
-    label: "⏳ Art Splash",
+    label: "⌛ Art Splash",
     value: "/welcome-backgrounds/premium/ArtSplash.png",
-    tier: "supporter_plus",
+    tier: "supporter_plus", // plus & plus_plus
   },
   {
-    label: "⏳ Cloudy",
+    label: "⌛ Cloudy",
     value: "/welcome-backgrounds/premium/Clouds.png",
     tier: "supporter_plus",
   },
-
   {
     label: "✨ Dessert",
     value: "/welcome-backgrounds/premium/SandWaves.png",
     tier: "supporter_plus",
   },
 ];
+
 
 // Handy set for quick checks
 const PREMIUM_BG_VALUES = new Set(
