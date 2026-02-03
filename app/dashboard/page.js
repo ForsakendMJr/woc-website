@@ -30,17 +30,36 @@ const PREMIUM_STATUS_ENDPOINT = "/api/premium/status";
 const PREMIUM_TIERS = ["free", "supporter", "supporter_plus", "supporter_plus_plus"];
 
 function normalizeTier(t) {
-  const x = String(t || "free").trim().toLowerCase();
+  const raw = String(t || "free").trim().toLowerCase();
+
+  // 🔧 Aliases (API/Stripe/DB may use different names)
+  const alias = {
+    // "premium" naming
+    premium: "supporter",
+    premium_plus: "supporter_plus",
+    premium_plus_plus: "supporter_plus_plus",
+
+    // common shorthand variants
+    supporterplus: "supporter_plus",
+    supporterplusplus: "supporter_plus_plus",
+    "supporter+": "supporter_plus",
+    "supporter++": "supporter_plus_plus",
+
+    // spacing variants
+    "supporter plus": "supporter_plus",
+    "supporter plus plus": "supporter_plus_plus",
+  };
+
+  const x = alias[raw] || raw;
   return PREMIUM_TIERS.includes(x) ? x : "free";
 }
-function tierRank(t) {
-  return Math.max(0, PREMIUM_TIERS.indexOf(t));
-}
 
+function tierRank(t) {
+  return Math.max(0, PREMIUM_TIERS.indexOf(normalizeTier(t)));
+}
 function hasTier(currentTier, minTier) {
   return tierRank(currentTier) >= tierRank(minTier);
 }
-
 
 
 // ✅ Welcome Card Background Options (Free + Premium packs)
