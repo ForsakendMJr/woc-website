@@ -4,10 +4,6 @@ import GuildSettings from "../../../../models/GuildSettings";
 
 export const dynamic = "force-dynamic";
 
-/**
- * These keys MUST match your dashboard MODULE_TREE category keys
- * and your bot CATEGORY_TO_MODULE_KEY mapping.
- */
 const MODULE_KEYS = [
   "moderation",
   "logging",
@@ -28,17 +24,14 @@ function isSnowflake(x) {
 }
 
 function extractGuildId(req, params) {
-  // 1) Normal Next App Router param
   const p = params?.guildId ? String(params.guildId).trim() : "";
   if (isSnowflake(p)) return p;
 
-  // 2) Query param fallback (if you ever hit it like ?guildId=)
   try {
     const url = new URL(req.url);
     const q = (url.searchParams.get("guildId") || "").trim();
     if (isSnowflake(q)) return q;
 
-    // 3) Path parsing fallback: /api/guilds/<ID>/settings
     const parts = url.pathname.split("/").filter(Boolean);
     const i = parts.indexOf("guilds");
     const fromPath = i !== -1 ? (parts[i + 1] || "").trim() : "";
@@ -46,6 +39,93 @@ function extractGuildId(req, params) {
   } catch {}
 
   return "";
+}
+
+function deepClone(obj) {
+  try {
+    // eslint-disable-next-line no-undef
+    if (typeof structuredClone === "function") return structuredClone(obj);
+  } catch {}
+  return JSON.parse(JSON.stringify(obj));
+}
+
+function normalizeWelcomeType(raw) {
+  const t = String(raw || "").trim().toLowerCase();
+  if (!t) return "message";
+  if (t === "embed+text") return "embed_text";
+  if (t === "both") return "embed_text";
+  if (t === "message") return "message";
+  if (t === "embed") return "embed";
+  if (t === "embed_text") return "embed_text";
+  if (t === "card") return "card";
+  return "message";
+}
+
+function typeToMode(type) {
+  const t = normalizeWelcomeType(type);
+  if (t === "embed_text") return "both";
+  if (t === "embed") return "embed";
+  return "message";
+}
+
+function modeToType(mode) {
+  const m = String(mode || "").trim().toLowerCase();
+  if (m === "both") return "embed_text";
+  if (m === "embed") return "embed";
+  return "message";
+}
+
+function mergeModuleDefaults(existingModules) {
+  const out =
+    existingModules && typeof existingModules === "object" ? existingModules : {};
+
+  for (const key of MODULE_KEYS) {
+    if (!out[key] || typeof out[key] !== "object") out[key] = {};
+    if (typeof out[key].enabled !== "boolean") out[key].enabled = true;
+    if (!out[key].subs || typeof out[key].subs !== "object") out[key].subs = {};
+  }
+
+  return out;
+}
+
+// ✅ Full default welcome object (matches dashboard + bot)
+function defaultWelcome() {
+  return {
+    enabled: false,
+    channelId: "",
+    dmEnabled: false,
+    message: "Welcome {user} to **{server}**! ✨",
+    autoRoleId: "",
+
+    // new canonical
+    type: "message", // message | embed | embed_text | card
+
+    // legacy
+    mode: "message", // message | embed | both
+
+    embed: {
+      color: "#7c3aed",
+      title: "Welcome!",
+      url: "",
+      description: "Welcome {user} to **{server}**!",
+      author: { name: "{server}", iconUrl: "", url: "" },
+      thumbnailUrl: "{avatar}",
+      imageUrl: "",
+      footer: { text: "Member #{membercount}", iconUrl: "" },
+      fields: [],
+    },
+
+    card: {
+      enabled: false,
+      title: "{user.name} just joined the server",
+      subtitle: "Member #{membercount}",
+      backgroundColor: "#0b1020",
+      textColor: "#ffffff",
+      overlayOpacity: 0.35,
+      backgroundUrl: "",
+      showAvatar: true,
+    },
+  };
 }
 
 function defaultSettings(guildId) {
@@ -65,13 +145,7 @@ function defaultSettings(guildId) {
       commandChannelId: "",
       editChannelId: "",
     },
-    welcome: {
-      enabled: false,
-      channelId: "",
-      message: "Welcome {user} to **{server}**! ✨",
-      autoRoleId: "",
-    },
-    // ✅ IMPORTANT: default modules ON (subs can be empty; dashboard treats missing subs as true)
+    welcome: defaultWelcome(),
     modules: MODULE_KEYS.reduce((acc, k) => {
       acc[k] = { enabled: true, subs: {} };
       return acc;
@@ -80,28 +154,50 @@ function defaultSettings(guildId) {
   };
 }
 
-/**
- * Merge defaults without overwriting explicit false values.
- * - If category missing -> add it (enabled true)
- * - If enabled missing -> set true
- * - subs: we do NOT need to pre-fill, dashboard uses ?? true
- */
-function mergeModuleDefaults(existingModules) {
-  const out = existingModules && typeof existingModules === "object" ? existingModules : {};
+// ✅ Merge helper (deep merge objects, arrays overwritten)
+function deepMerge(base, patch) {
+  const a = base && typeof base === "object" ? base : {};
+  const b = patch && typeof patch === "object" ? patch : {};
+  const out = deepClone(a);
 
-  for (const key of MODULE_KEYS) {
-    if (!out[key] || typeof out[key] !== "object") out[key] = {};
-    if (typeof out[key].enabled !== "boolean") out[key].enabled = true;
-    if (!out[key].subs || typeof out[key].subs !== "object") out[key].subs = {};
+  for (const [k, v] of Object.entries(b)) {
+    if (Array.isArray(v)) {
+      out[k] = v;
+    } else if (v && typeof v === "object") {
+      out[k] = deepMerge(out[k], v);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+// ✅ Normalize welcome before save (type is truth, mode synced, card.enabled enforced)
+function normalizeWelcomeOnSave(welcomeInput) {
+  const base = defaultWelcome();
+  const w = deepMerge(base, welcomeInput || {});
+
+  // if type missing but mode exists, infer type from mode
+  if (!w.type && w.mode) w.type = modeToType(w.mode);
+
+  w.type = normalizeWelcomeType(w.type);
+  w.mode = typeToMode(w.type);
+
+  // keep card.enabled aligned
+  if (w.type === "card") {
+    w.card = w.card || {};
+    w.card.enabled = true;
+  } else {
+    // if not card, don't forcibly disable (user might want to keep config)
+    w.card = w.card || {};
   }
 
-  return out;
+  return w;
 }
 
 export async function GET(req, ctx) {
   const guildId = extractGuildId(req, ctx?.params);
 
-  // IMPORTANT: return 200 with ok:true + warning (matches your status/channels style)
   if (!isSnowflake(guildId)) {
     return NextResponse.json(
       { ok: true, settings: null, guildId: "", warning: "Missing/invalid guildId." },
@@ -112,18 +208,22 @@ export async function GET(req, ctx) {
   try {
     await dbConnect();
 
-    // ✅ DO NOT lean() here, we want to be able to save migrations
     let doc = await GuildSettings.findOne({ guildId });
     if (!doc) {
       doc = await GuildSettings.create(defaultSettings(guildId));
     }
 
-    // ✅ MIGRATION: ensure modules/categories exist + default enabled
+    // ensure modules exist
     const before = JSON.stringify(doc.modules || {});
     doc.modules = mergeModuleDefaults(doc.modules);
     const after = JSON.stringify(doc.modules || {});
 
-    if (before !== after) {
+    // ✅ ensure welcome is full + normalized too
+    const wBefore = JSON.stringify(doc.welcome || {});
+    doc.welcome = normalizeWelcomeOnSave(doc.welcome);
+    const wAfter = JSON.stringify(doc.welcome || {});
+
+    if (before !== after || wBefore !== wAfter) {
       await doc.save();
     }
 
@@ -156,10 +256,6 @@ export async function PUT(req, ctx) {
 
   try {
     const body = await req.json().catch(() => ({}));
-
-    // ✅ Accept BOTH shapes:
-    // 1) dashboard sends the settings object directly
-    // 2) some clients send { settings: {...} }
     const incoming =
       body && typeof body === "object" && body.settings && typeof body.settings === "object"
         ? body.settings
@@ -172,15 +268,24 @@ export async function PUT(req, ctx) {
       );
     }
 
-    // enforce correct guild + ensure modules defaults so UI doesn't flip weirdly
-    incoming.guildId = guildId;
-    incoming.modules = mergeModuleDefaults(incoming.modules);
-
     await dbConnect();
 
+    // ✅ fetch existing so partial updates don't wipe nested objects
+    const existing = await GuildSettings.findOne({ guildId });
+    const base = existing?.toObject?.() || defaultSettings(guildId);
+
+    // enforce correct guild + modules defaults
+    const next = deepMerge(base, incoming);
+    next.guildId = guildId;
+    next.modules = mergeModuleDefaults(next.modules);
+
+    // ✅ normalize welcome (this is the big fix)
+    next.welcome = normalizeWelcomeOnSave(next.welcome);
+
+    // ✅ Save full object
     const updated = await GuildSettings.findOneAndUpdate(
       { guildId },
-      { $set: incoming },
+      { $set: next },
       { new: true, upsert: true }
     );
 

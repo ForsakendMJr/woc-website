@@ -639,12 +639,31 @@ function isSubEnabled(modules, catKey, subKey) {
 function normalizeWelcomeType(raw) {
   const t = String(raw || "").trim().toLowerCase();
   if (!t) return "message";
+
+  // legacy aliases
   if (t === "embed+text") return "embed_text";
-  if (t === "embed_text") return "embed_text";
   if (t === "both") return "embed_text";
+
+  // canonical
   if (t === "message") return "message";
   if (t === "embed") return "embed";
+  if (t === "embed_text") return "embed_text";
   if (t === "card") return "card";
+
+  return "message";
+}
+
+// legacy compatibility helpers
+function modeToType(mode) {
+  const m = String(mode || "").trim().toLowerCase();
+  if (m === "both") return "embed_text";
+  if (m === "embed") return "embed";
+  return "message";
+}
+function typeToMode(type) {
+  const t = normalizeWelcomeType(type);
+  if (t === "embed_text") return "both";
+  if (t === "embed") return "embed";
   return "message";
 }
 
@@ -652,7 +671,14 @@ function ensureWelcomeDefaults(welcome) {
   const w = welcome && typeof welcome === "object" ? deepClone(welcome) : {};
 
   if (typeof w.enabled !== "boolean") w.enabled = false;
+
+  // ✅ Source of truth is `type`.
+  // If it's missing but `mode` exists (old docs), infer it.
+  if (!w.type && w.mode) w.type = modeToType(w.mode);
   w.type = normalizeWelcomeType(w.type);
+
+  // ✅ Keep legacy `mode` in sync (but never let it override type)
+  w.mode = typeToMode(w.type);
 
   if (typeof w.channelId !== "string") w.channelId = "";
   if (typeof w.message !== "string")
@@ -692,11 +718,12 @@ function ensureWelcomeDefaults(welcome) {
   if (typeof w.card.backgroundUrl !== "string") w.card.backgroundUrl = "";
   if (typeof w.card.showAvatar !== "boolean") w.card.showAvatar = true;
 
-  // Keep in sync
+  // ✅ Keep in sync: if type is card, ensure card.enabled is true
   if (w.type === "card") w.card.enabled = true;
 
   return w;
 }
+
 
 function ensureDefaultSettings(guildId) {
   const defaultModules = buildDefaultModulesFromTree(MODULE_TREE);
