@@ -97,7 +97,7 @@ function defaultWelcome() {
     message: "Welcome {user} to **{server}**! ✨",
     autoRoleId: "",
 
-    // new canonical
+    // canonical
     type: "message", // message | embed | embed_text | card
 
     // legacy
@@ -188,7 +188,7 @@ function normalizeWelcomeOnSave(welcomeInput) {
     w.card = w.card || {};
     w.card.enabled = true;
   } else {
-    // if not card, don't forcibly disable (user might want to keep config)
+    // keep config, don't force-disable
     w.card = w.card || {};
   }
 
@@ -218,7 +218,7 @@ export async function GET(req, ctx) {
     doc.modules = mergeModuleDefaults(doc.modules);
     const after = JSON.stringify(doc.modules || {});
 
-    // ✅ ensure welcome is full + normalized too
+    // ensure welcome is full + normalized too
     const wBefore = JSON.stringify(doc.welcome || {});
     doc.welcome = normalizeWelcomeOnSave(doc.welcome);
     const wAfter = JSON.stringify(doc.welcome || {});
@@ -271,18 +271,18 @@ export async function PUT(req, ctx) {
     await dbConnect();
 
     // ✅ fetch existing so partial updates don't wipe nested objects
-    const existing = await GuildSettings.findOne({ guildId });
-    const base = existing?.toObject?.() || defaultSettings(guildId);
+    const existingDoc = await GuildSettings.findOne({ guildId });
+    const base = existingDoc?.toObject?.() || defaultSettings(guildId);
 
-    // enforce correct guild + modules defaults
+    // ✅ merge full settings
     const next = deepMerge(base, incoming);
     next.guildId = guildId;
     next.modules = mergeModuleDefaults(next.modules);
 
-    // ✅ normalize welcome (this is the big fix)
-    next.welcome = normalizeWelcomeOnSave(next.welcome);
+    // ✅ IMPORTANT FIX: merge welcome separately, then normalize
+    const mergedWelcomeRaw = deepMerge(base?.welcome || {}, incoming?.welcome || {});
+    next.welcome = normalizeWelcomeOnSave(mergedWelcomeRaw);
 
-    // ✅ Save full object
     const updated = await GuildSettings.findOneAndUpdate(
       { guildId },
       { $set: next },
