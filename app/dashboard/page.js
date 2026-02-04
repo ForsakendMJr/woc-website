@@ -992,7 +992,8 @@ export default function DashboardPage() {
     expiresAt: null,
   });
 
-  const premiumActive = !!premiumStatus?.premium;
+  const premiumActive = !!premiumStatus?.active || !!premiumStatus?.premium;
+
   const premiumTier = normalizeTier(premiumStatus?.tier);
 
   const clientIdRaw = process.env.NEXT_PUBLIC_DISCORD_CLIENT_ID || "";
