@@ -11,22 +11,17 @@ const PREMIUM_TIERS = ["free", "supporter", "supporter_plus", "supporter_plus_pl
 
 function normalizeTier(t) {
   const raw = String(t || "free").trim().toLowerCase();
-
-  // 🔧 Aliases (API/Stripe/DB may use different names)
   const alias = {
     premium: "supporter",
     premium_plus: "supporter_plus",
     premium_plus_plus: "supporter_plus_plus",
-
     supporterplus: "supporter_plus",
     supporterplusplus: "supporter_plus_plus",
     "supporter+": "supporter_plus",
     "supporter++": "supporter_plus_plus",
-
     "supporter plus": "supporter_plus",
     "supporter plus plus": "supporter_plus_plus",
   };
-
   const x = alias[raw] || raw;
   return PREMIUM_TIERS.includes(x) ? x : "free";
 }
@@ -85,7 +80,8 @@ function ensureWelcomeDefaults(welcome) {
   w.embed ||= {};
   if (typeof w.embed.title !== "string") w.embed.title = "Welcome!";
   if (typeof w.embed.url !== "string") w.embed.url = "";
-  if (typeof w.embed.description !== "string") w.embed.description = "Welcome {user} to **{server}**!";
+  if (typeof w.embed.description !== "string")
+    w.embed.description = "Welcome {user} to **{server}**!";
   if (typeof w.embed.color !== "string") w.embed.color = "#7c3aed";
   if (typeof w.embed.thumbnailUrl !== "string") w.embed.thumbnailUrl = "{avatar}";
   if (typeof w.embed.imageUrl !== "string") w.embed.imageUrl = "";
@@ -187,9 +183,10 @@ function buildWelcomeCardPreviewUrl({
   if (textColor) params.set("textColor", textColor);
   if (typeof overlayOpacity === "number") params.set("overlayOpacity", String(overlayOpacity));
   params.set("showAvatar", showAvatar ? "true" : "false");
+
+  // IMPORTANT: backgroundUrl must be local path (/welcome-backgrounds/...) for your strict route
   if (backgroundUrl) params.set("backgroundUrl", backgroundUrl);
 
-  // Bust cache ALWAYS changes preview URL
   params.set("_", String(bust || Date.now()));
   return `${WELCOME_CARD_PNG_ENDPOINT(guildId)}?${params.toString()}`;
 }
@@ -199,12 +196,10 @@ export default function WelcomeModule({
   settings,
   onChange,
 
-  // ✅ added: lets WelcomeModule tell parent “you must save”
+  // ✅ parent can ignore, but if provided we will call it
   onDirty = () => {},
 
   channels,
-
-  // Optional premium gating inputs
   premiumActive = false,
   premiumTier = "free",
   freeBackgrounds = [],
@@ -214,93 +209,82 @@ export default function WelcomeModule({
   const guildOk = isSnowflake(gid);
 
   const welcome = useMemo(() => ensureWelcomeDefaults(settings?.welcome), [settings]);
+  const type = normalizeWelcomeType(welcome?.type);
 
   const [bgNotice, setBgNotice] = useState("");
   const [previewBust, setPreviewBust] = useState(Date.now());
   const [previewError, setPreviewError] = useState("");
   const [metaStatus, setMetaStatus] = useState("");
 
-  const type = normalizeWelcomeType(welcome?.type);
-
   const textChannels = useMemo(() => {
     const list = Array.isArray(channels) ? channels : [];
     return list.filter((c) => {
       const t = String(c?.type || "").toLowerCase();
       const label = String(c?.typeLabel || "").toLowerCase();
-      return t.includes("text") || label.includes("text") || t.includes("announcement") || label.includes("announce");
+      return (
+        t.includes("text") ||
+        label.includes("text") ||
+        t.includes("announcement") ||
+        label.includes("announce")
+      );
     });
   }, [channels]);
-
-  function absolutizeMaybeLocalUrl(u) {
-    const s = String(u || "").trim();
-    if (!s) return "";
-    if (/^https?:\/\//i.test(s)) return s; // already absolute
-    if (s.startsWith("/") && typeof window !== "undefined") return `${window.location.origin}${s}`;
-    return s;
-  }
 
   // ✅ central helper: update + mark dirty
   function commit(nextSettings) {
     onChange(nextSettings);
-    onDirty(); // ✅ tells parent to setDirty(true)
+    onDirty();
   }
 
-function setWelcome(patch) {
-  const next = deepClone(settings || {});
-  const merged = ensureWelcomeDefaults({ ...(next.welcome || {}), ...patch });
+  function setWelcomePatch(patch) {
+    const s2 = deepClone(settings || {});
+    const w2 = ensureWelcomeDefaults({ ...(s2.welcome || {}), ...patch });
 
-  // ✅ auto-enable when editing welcome
-  merged.enabled = true;
+    // only auto-enable when editing content-y fields (NOT when toggling enabled off)
+    if (Object.prototype.hasOwnProperty.call(patch, "enabled")) {
+      w2.enabled = !!patch.enabled;
+    } else {
+      w2.enabled = true;
+    }
 
-  next.welcome = merged;
-  onChange(next);
-}
+    s2.welcome = w2;
+    commit(s2);
+  }
 
+  function setEmbedPatch(patch) {
+    const s2 = deepClone(settings || {});
+    const w2 = ensureWelcomeDefaults(s2.welcome);
 
-function setEmbed(patch) {
-  const next = deepClone(settings || {});
-  const w = ensureWelcomeDefaults(next.welcome);
+    w2.embed = { ...(w2.embed || {}), ...patch };
+    w2.enabled = true;
 
-  w.embed = { ...(w.embed || {}), ...patch };
+    s2.welcome = w2;
+    commit(s2);
+  }
 
-  // ✅ auto-enable when editing embed
-  w.enabled = true;
+  function setCardPatch(patch) {
+    const s2 = deepClone(settings || {});
+    const w2 = ensureWelcomeDefaults(s2.welcome);
 
-  next.welcome = w;
-  onChange(next);
-}
+    w2.type = "card";
+    w2.card = { ...(w2.card || {}), ...patch, enabled: true };
+    w2.enabled = true;
 
+    s2.welcome = w2;
+    commit(s2);
+  }
 
-function setCard(patch) {
-  const next = deepClone(settings || {});
-  const w = ensureWelcomeDefaults(next.welcome);
-
-  w.type = "card";
-  w.card = { ...(w.card || {}), ...patch, enabled: true };
-
-  // ✅ auto-enable when editing card
-  w.enabled = true;
-
-  next.welcome = w;
-  onChange(next);
-}
-
-
-  // ✅ Dedicated background setter with premium gating + preview refresh
+  // ✅ FIXED background setter (this was broken in your paste)
   function setCardBackground(nextVal) {
     const nextBg = String(nextVal || "");
-w2.enabled = true; // ✅
-w2.type = "card";
-w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
 
+    // premium gate check
     const premOpt = (premiumBackgrounds || []).find((o) => o.value === nextBg);
     if (premOpt) {
       const required = normalizeTier(premOpt.tier || "supporter");
       const allowed = !!premiumActive && hasTier(normalizeTier(premiumTier), required);
       if (!allowed) {
-        setBgNotice(
-          `Locked: "${premOpt.label}" requires ${required.replaceAll("_", " ")} Premium.`
-        );
+        setBgNotice(`Locked: "${premOpt.label}" requires ${required.replaceAll("_", " ")} Premium.`);
         return;
       }
     }
@@ -310,8 +294,8 @@ w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
     const s2 = deepClone(settings || {});
     const w2 = ensureWelcomeDefaults(s2.welcome);
 
-    // Keep UI and preview aligned
     w2.type = "card";
+    w2.enabled = true;
     w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
 
     s2.welcome = w2;
@@ -322,6 +306,7 @@ w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
     setPreviewBust(Date.now());
   }
 
+  // Preview URL
   const previewUrl = useMemo(() => {
     if (type !== "card") return "";
     if (!guildOk) return "";
@@ -338,35 +323,33 @@ w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
       if (!allowed) bgForPreview = "";
     }
 
+    // Try to use any preview data you pass in; otherwise safe fallbacks
+    const serverName = settings?.guildName || settings?.serverName || "Server";
+    const serverIconUrl = settings?.guildIconUrl || settings?.serverIconUrl || "";
+    const username = settings?.previewUserName || settings?.username || "New member";
+    const membercount = settings?.previewMemberCount || settings?.membercount || "123";
+    const avatarUrl = settings?.previewAvatarUrl || settings?.avatarUrl || "";
+
     return buildWelcomeCardPreviewUrl({
       guildId: gid,
-      serverName: settings?.guildName || "Server",
-      serverIconUrl: settings?.guildIconUrl || "",
-      username: settings?.previewUserName || "New Member",
-      membercount: settings?.previewMemberCount || "123",
-      avatarUrl: settings?.previewAvatarUrl || "",
+      serverName,
+      serverIconUrl,
+      username,
+      membercount,
+      avatarUrl,
       title: card?.title || "{user.name} just joined the server",
       subtitle: card?.subtitle || "Member #{membercount}",
       backgroundColor: card?.backgroundColor || "#0b1020",
       textColor: card?.textColor || "#ffffff",
       overlayOpacity: clampNum(card?.overlayOpacity ?? 0.35, 0, 0.85),
       showAvatar: card?.showAvatar !== false,
-      backgroundUrl: absolutizeMaybeLocalUrl(bgForPreview),
+      // IMPORTANT: send local path only
+      backgroundUrl: bgForPreview,
       bust: previewBust,
     });
-  }, [
-    type,
-    gid,
-    guildOk,
-    welcome,
-    previewBust,
-    premiumActive,
-    premiumTier,
-    premiumBackgrounds,
-    settings,
-  ]);
+  }, [type, gid, guildOk, welcome, previewBust, premiumActive, premiumTier, premiumBackgrounds, settings]);
 
-  // Meta check (background loading status)
+  // Meta check (background loading status from your strict route)
   useEffect(() => {
     if (type !== "card") return;
     if (!guildOk) return;
@@ -385,7 +368,6 @@ w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
       try {
         const u = new URL(previewUrl, window.location.origin);
         u.searchParams.set("meta", "1");
-
         const res = await fetch(u.toString(), { cache: "no-store", signal: ac.signal });
         const data = await res.json().catch(() => null);
         const st = data?.background?.status || "";
@@ -424,7 +406,7 @@ w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
             className="mt-3"
             disabled={!guildOk}
             checked={!!welcome?.enabled}
-            onChange={(e) => setWelcome({ enabled: e.target.checked })}
+            onChange={(e) => setWelcomePatch({ enabled: e.target.checked })}
           />
         </label>
 
@@ -436,7 +418,7 @@ w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
             channels={textChannels}
             value={welcome?.channelId || ""}
             disabled={!guildOk}
-            onChange={(val) => setWelcome({ channelId: val })}
+            onChange={(val) => setWelcomePatch({ channelId: val })}
             allowNone={false}
             placeholder="Select a channel"
           />
@@ -458,14 +440,18 @@ w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
                 type="button"
                 disabled={!guildOk}
                 onClick={() => {
-                  const next = ensureWelcomeDefaults({
+                  const nextWelcome = ensureWelcomeDefaults({
                     ...welcome,
                     type: val,
                     card: { ...(welcome?.card || {}), enabled: val === "card" },
                   });
 
                   const s2 = deepClone(settings || {});
-                  s2.welcome = next;
+                  s2.welcome = nextWelcome;
+
+                  // if switching to card, we typically want welcome on
+                  s2.welcome.enabled = true;
+
                   commit(s2);
 
                   setPreviewError("");
@@ -504,7 +490,7 @@ w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
             className="mt-1"
             disabled={!guildOk}
             checked={!!welcome?.dmEnabled}
-            onChange={(e) => setWelcome({ dmEnabled: e.target.checked })}
+            onChange={(e) => setWelcomePatch({ dmEnabled: e.target.checked })}
           />
         </label>
 
@@ -518,7 +504,7 @@ w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
             <textarea
               value={welcome?.message || ""}
               disabled={!guildOk}
-              onChange={(e) => setWelcome({ message: e.target.value })}
+              onChange={(e) => setWelcomePatch({ message: e.target.value })}
               className="
                 mt-3 w-full px-3 py-2 rounded-2xl min-h-[110px]
                 border border-[var(--border-subtle)]/70
@@ -534,12 +520,9 @@ w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
         {/* EMBED BUILDER */}
         {["embed", "embed_text"].includes(type) ? (
           <div className="woc-card p-5 sm:col-span-2">
-            {/* (unchanged embed UI below, except handlers already call setEmbed which commits+dirty) */}
-            {/* ... keep the rest of your embed builder exactly as you had it ... */}
-            {/* Your current embed builder section is fine as-is because setEmbed/setWelcome now mark dirty */}
-            {/* NOTE: I’m not rewriting your whole embed block to avoid accidental UI changes. */}
             <div className="text-xs text-[var(--text-muted)]">
               Your embed builder block can stay exactly the same under here.
+              Just make sure its handlers call <code>setEmbedPatch(...)</code> or <code>setWelcomePatch(...)</code>.
             </div>
           </div>
         ) : null}
@@ -574,7 +557,7 @@ w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
                   value={welcome?.card?.title || ""}
                   disabled={!guildOk}
                   onChange={(e) => {
-                    setCard({ title: e.target.value });
+                    setCardPatch({ title: e.target.value });
                     setPreviewBust(Date.now());
                   }}
                   className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
@@ -587,7 +570,7 @@ w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
                   value={welcome?.card?.subtitle || ""}
                   disabled={!guildOk}
                   onChange={(e) => {
-                    setCard({ subtitle: e.target.value });
+                    setCardPatch({ subtitle: e.target.value });
                     setPreviewBust(Date.now());
                   }}
                   className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
@@ -600,7 +583,7 @@ w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
                   value={welcome?.card?.backgroundColor || ""}
                   disabled={!guildOk}
                   onChange={(e) => {
-                    setCard({ backgroundColor: e.target.value });
+                    setCardPatch({ backgroundColor: e.target.value });
                     setPreviewBust(Date.now());
                   }}
                   className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
@@ -614,7 +597,7 @@ w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
                   value={welcome?.card?.textColor || ""}
                   disabled={!guildOk}
                   onChange={(e) => {
-                    setCard({ textColor: e.target.value });
+                    setCardPatch({ textColor: e.target.value });
                     setPreviewBust(Date.now());
                   }}
                   className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
@@ -632,7 +615,7 @@ w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
                   value={Number(welcome?.card?.overlayOpacity ?? 0.35)}
                   disabled={!guildOk}
                   onChange={(e) => {
-                    setCard({ overlayOpacity: clampNum(e.target.value, 0, 0.85) });
+                    setCardPatch({ overlayOpacity: clampNum(e.target.value, 0, 0.85) });
                     setPreviewBust(Date.now());
                   }}
                   className="w-full px-3 py-2 rounded-xl border border-[var(--border-subtle)]/70 bg-[color-mix(in_oklab,var(--bg-card)_70%,transparent)] outline-none"
@@ -649,7 +632,7 @@ w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
                   disabled={!guildOk}
                   checked={welcome?.card?.showAvatar !== false}
                   onChange={(e) => {
-                    setCard({ showAvatar: e.target.checked });
+                    setCardPatch({ showAvatar: e.target.checked });
                     setPreviewBust(Date.now());
                   }}
                 />
@@ -724,9 +707,7 @@ w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
                       src={previewUrl}
                       alt="Welcome card preview"
                       className="w-full rounded-2xl border border-[var(--border-subtle)]/70"
-                      onError={() =>
-                        setPreviewError("Preview failed to load. (Route error or blocked image.)")
-                      }
+                      onError={() => setPreviewError("Preview failed to load. (Route error or blocked image.)")}
                       onLoad={() => setPreviewError("")}
                     />
 
@@ -738,10 +719,15 @@ w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
                     {metaStatus ? (
                       <div className="mt-3 text-xs text-amber-200/90 bg-amber-500/10 border border-amber-400/30 rounded-xl p-3">
                         Background status: <b>{metaStatus}</b>
-                        {metaStatus === "blocked_html" ? (
+                        {metaStatus === "rejected" ? (
                           <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">
-                            The background URL returned HTML (hotlink protection). Use local{" "}
-                            <b>/public/welcome-backgrounds/</b> paths.
+                            The route rejected the background URL. It must be a local path like{" "}
+                            <b>/welcome-backgrounds/free/Name.png</b> or <b>/welcome-backgrounds/premium/Name.png</b>.
+                          </div>
+                        ) : null}
+                        {metaStatus === "fetch_failed" ? (
+                          <div className="mt-1 text-[0.78rem] text-[var(--text-muted)]">
+                            File missing in <b>/public</b> or filename mismatch.
                           </div>
                         ) : null}
                       </div>
@@ -766,7 +752,7 @@ w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
           <input
             value={welcome?.autoRoleId || ""}
             disabled={!guildOk}
-            onChange={(e) => setWelcome({ autoRoleId: e.target.value })}
+            onChange={(e) => setWelcomePatch({ autoRoleId: e.target.value })}
             className="
               mt-3 w-full px-3 py-2 rounded-2xl
               border border-[var(--border-subtle)]/70

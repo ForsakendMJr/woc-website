@@ -10,6 +10,14 @@ import GuildSettings from "../../../../models/GuildSettings";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const ALLOWED_BG_PREFIXES = [
+  "/welcome-backgrounds/free/",
+  "/welcome-backgrounds/premium/",
+];
+
+// --------------------
+// tiny utils
+// --------------------
 function qp(url, key, fallback = "") {
   const v = url.searchParams.get(key);
   return v == null || v === "" ? fallback : v;
@@ -31,6 +39,10 @@ function truncate(s, max = 48) {
   s = String(s || "");
   return s.length <= max ? s : s.slice(0, Math.max(0, max - 1)) + "…";
 }
+function isSnowflake(x) {
+  const s = String(x || "").trim();
+  return /^\d{17,20}$/.test(s);
+}
 
 function sniffImageMime(buf) {
   if (!buf || buf.length < 12) return null;
@@ -38,23 +50,24 @@ function sniffImageMime(buf) {
   if (buf[0] === 0xff && buf[1] === 0xd8) return "image/jpeg";
   if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return "image/gif";
   if (
-    buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
-    buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
-  ) return "image/webp";
+    buf[0] === 0x52 &&
+    buf[1] === 0x49 &&
+    buf[2] === 0x46 &&
+    buf[3] === 0x46 &&
+    buf[8] === 0x57 &&
+    buf[9] === 0x45 &&
+    buf[10] === 0x42 &&
+    buf[11] === 0x50
+  )
+    return "image/webp";
   return null;
 }
 
 function looksLikeHtmlResponse(contentType, buf) {
   const ct = (contentType || "").toLowerCase();
   if (ct.includes("text/html")) return true;
-
   const head = buf.slice(0, 200).toString("utf8").toLowerCase();
-  return (
-    head.includes("<!doctype html") ||
-    head.includes("<html") ||
-    head.includes("<head") ||
-    head.includes("<script")
-  );
+  return head.includes("<!doctype html") || head.includes("<html") || head.includes("<head") || head.includes("<script");
 }
 
 async function fetchAsDataUriWithStatus(remoteUrl) {
@@ -77,10 +90,7 @@ async function fetchAsDataUriWithStatus(remoteUrl) {
     if (!buf.length) return { dataUri: null, status: "fetch_failed" };
 
     const ct = res.headers.get("content-type") || "";
-
-    if (looksLikeHtmlResponse(ct, buf)) {
-      return { dataUri: null, status: "blocked_html" };
-    }
+    if (looksLikeHtmlResponse(ct, buf)) return { dataUri: null, status: "blocked_html" };
 
     const declared = (ct || "").toLowerCase();
     const mime = declared.startsWith("image/") ? declared.split(";")[0] : sniffImageMime(buf);
@@ -92,15 +102,14 @@ async function fetchAsDataUriWithStatus(remoteUrl) {
   }
 }
 
-async function readPublicFileAsDataUri(relPathFromPublic) {
-  const rel = String(relPathFromPublic || "").replace(/^\/+/, "");
+async function readPublicFileAsDataUri(publicPath) {
+  const rel = String(publicPath || "").replace(/^\/+/, "");
   if (!rel) return null;
 
   try {
     const abs = path.join(process.cwd(), "public", rel);
     const buf = await fs.readFile(abs);
     if (!buf.length) return null;
-
     const mime = sniffImageMime(buf) || "image/png";
     return `data:${mime};base64,${buf.toString("base64")}`;
   } catch {
@@ -108,73 +117,28 @@ async function readPublicFileAsDataUri(relPathFromPublic) {
   }
 }
 
-// ✅ Try common extensions for ID-like values (e.g. "rough_paper")
-async function tryResolveWelcomeBackground(value) {
+function sanitizeBackgroundUrl(value) {
   const raw = String(value || "").trim();
-  if (!raw) return { kind: "none", resolved: "", dataUri: null, status: "none" };
+  if (!raw) return "";
 
-  // Normalize Windows backslashes just in case someone pasted them
   const s = raw.replaceAll("\\", "/");
 
-  // Already a local public path?
-  if (s.startsWith("/")) {
-    const dataUri = await readPublicFileAsDataUri(s);
-    return {
-      kind: "local",
-      resolved: s,
-      dataUri,
-      status: dataUri ? "ok" : "fetch_failed",
-    };
+  // Only allow local public paths inside our allowed folders
+  if (s.startsWith("/") && ALLOWED_BG_PREFIXES.some((p) => s.startsWith(p))) {
+    return s;
   }
 
-  // Looks like a URL?
+  // If someone passed a full URL to THIS SAME SITE, allow it only if it points to allowed folders
   if (/^https?:\/\//i.test(s)) {
-    return { kind: "remote", resolved: s, dataUri: null, status: "unknown" };
+    try {
+      const u = new URL(s);
+      const p = u.pathname || "";
+      if (p.startsWith("/") && ALLOWED_BG_PREFIXES.some((pref) => p.startsWith(pref))) return p;
+    } catch {}
   }
 
-  // Missing leading slash but contains a folder (e.g. "welcome-backgrounds/x.png")
-  if (s.includes("/")) {
-    const asLocal = `/${s.replace(/^\/+/, "")}`;
-    const dataUri = await readPublicFileAsDataUri(asLocal);
-    return {
-      kind: "local",
-      resolved: asLocal,
-      dataUri,
-      status: dataUri ? "ok" : "fetch_failed",
-    };
-  }
-
-  // Filename with extension? assume /welcome-backgrounds/
-  if (/\.(png|jpg|jpeg|webp|gif)$/i.test(s)) {
-    const asLocal = `/welcome-backgrounds/${s}`;
-    const dataUri = await readPublicFileAsDataUri(asLocal);
-    return {
-      kind: "local",
-      resolved: asLocal,
-      dataUri,
-      status: dataUri ? "ok" : "fetch_failed",
-    };
-  }
-
-  // ID-like value: try common extensions in /welcome-backgrounds/
-  const base = s;
-  const candidates = [
-    `/welcome-backgrounds/${base}.png`,
-    `/welcome-backgrounds/${base}.webp`,
-    `/welcome-backgrounds/${base}.jpg`,
-    `/welcome-backgrounds/${base}.jpeg`,
-    `/welcome-backgrounds/${base}.gif`,
-  ];
-
-  for (const p of candidates) {
-    // eslint-disable-next-line no-await-in-loop
-    const dataUri = await readPublicFileAsDataUri(p);
-    if (dataUri) {
-      return { kind: "local", resolved: p, dataUri, status: "ok" };
-    }
-  }
-
-  return { kind: "local", resolved: `/welcome-backgrounds/${base}.*`, dataUri: null, status: "fetch_failed" };
+  // Everything else is rejected (prevents random/unexpected backgrounds)
+  return "";
 }
 
 function fitFontSize(text, maxWidthPx, baseSize, minSize) {
@@ -186,23 +150,52 @@ function fitFontSize(text, maxWidthPx, baseSize, minSize) {
   return clamp(size, minSize, baseSize);
 }
 
+function renderTokens(str, vars) {
+  let out = String(str || "");
+  // common tokens (match your dashboard/bot mental model)
+  out = out.replaceAll("{user.name}", vars.username);
+  out = out.replaceAll("{username}", vars.username);
+  out = out.replaceAll("{user}", vars.username);
+  out = out.replaceAll("{mention}", vars.username);
+
+  out = out.replaceAll("{server}", vars.serverName);
+  out = out.replaceAll("{server.name}", vars.serverName);
+
+  out = out.replaceAll("{membercount}", vars.memberCount);
+  out = out.replaceAll("{server.member_count}", vars.memberCount);
+
+  out = out.replaceAll("{avatar}", vars.avatarUrl);
+
+  return out;
+}
+
 export async function GET(req, { params }) {
   try {
     const url = new URL(req.url);
-    const guildId = params?.guildId;
+    const guildId = String(params?.guildId || "").trim();
     const metaMode = qp(url, "meta", "0") === "1";
 
     const require = createRequire(import.meta.url);
     const { Resvg } = require("@resvg/resvg-js");
 
-    let dbDefaults = {};
+    // --------------------
+    // DB defaults
+    // --------------------
+    let dbDefaults = {
+      backgroundUrl: "",
+      backgroundColor: "",
+      textColor: "",
+      overlayOpacity: "",
+      title: "",
+      subtitle: "",
+      showAvatar: "",
+    };
+
     try {
-      if (guildId) {
+      if (isSnowflake(guildId)) {
         await dbConnect();
         const settings = await GuildSettings.findOne({ guildId }).lean();
 
-        // ✅ Your dashboard stores welcome under settings.welcome.card.*
-        // But we also support older shapes so nothing breaks.
         const wc =
           settings?.welcome?.card ||
           settings?.welcomeCard ||
@@ -225,6 +218,9 @@ export async function GET(req, { params }) {
       console.warn("[welcome-card] settings lookup failed:", e?.message || e);
     }
 
+    // --------------------
+    // Inputs (query overrides DB)
+    // --------------------
     const backgroundUrlRaw =
       qp(url, "backgroundUrl", "") ||
       qp(url, "backgroundImageUrl", "") ||
@@ -232,54 +228,25 @@ export async function GET(req, { params }) {
       dbDefaults.backgroundUrl ||
       "";
 
-    // ✅ Robust background resolution
+    // ✅ sanitize/whitelist background
+    const backgroundUrlSafe = sanitizeBackgroundUrl(backgroundUrlRaw);
+
+    // Load background (local only, by design)
     let bgData = null;
     let bgStatus = "none";
-    let bgKind = "none";
     let bgResolved = "";
+    let bgKind = "none";
 
-    if (backgroundUrlRaw) {
-      // If it's a URL and same-origin, treat as local public file (more reliable than fetching yourself)
-      if (/^https?:\/\//i.test(backgroundUrlRaw)) {
-        try {
-          const reqHost = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
-          const reqProto = req.headers.get("x-forwarded-proto") || "https";
-          const origin = reqHost ? `${reqProto}://${reqHost}` : url.origin;
-
-          const parsed = new URL(backgroundUrlRaw);
-          const isSameOrigin = parsed.origin === origin;
-
-          if (isSameOrigin) {
-            const localPath = parsed.pathname || "";
-            const dataUri = await readPublicFileAsDataUri(localPath);
-            bgKind = "local";
-            bgResolved = localPath;
-            bgData = dataUri;
-            bgStatus = dataUri ? "ok" : "fetch_failed";
-          } else {
-            const bgRes = await fetchAsDataUriWithStatus(backgroundUrlRaw);
-            bgKind = "remote";
-            bgResolved = backgroundUrlRaw;
-            bgData = bgRes.dataUri;
-            bgStatus = bgRes.status;
-          }
-        } catch {
-          const bgRes = await fetchAsDataUriWithStatus(backgroundUrlRaw);
-          bgKind = "remote";
-          bgResolved = backgroundUrlRaw;
-          bgData = bgRes.dataUri;
-          bgStatus = bgRes.status;
-        }
-      } else {
-        // Not a URL: resolve it as a local welcome background (supports ids / filenames / missing slashes)
-        const resolved = await tryResolveWelcomeBackground(backgroundUrlRaw);
-        bgKind = resolved.kind;
-        bgResolved = resolved.resolved;
-        bgData = resolved.dataUri;
-        bgStatus = resolved.status;
-
-        // If it wasn't resolvable locally but actually looks like a remote URL without protocol (rare), you can add logic here.
-      }
+    if (backgroundUrlSafe) {
+      bgResolved = backgroundUrlSafe;
+      bgKind = "local";
+      bgData = await readPublicFileAsDataUri(backgroundUrlSafe);
+      bgStatus = bgData ? "ok" : "fetch_failed";
+    } else if (backgroundUrlRaw) {
+      // user tried to use a non-allowed background
+      bgStatus = "rejected";
+      bgKind = "none";
+      bgResolved = "";
     }
 
     if (metaMode) {
@@ -287,15 +254,17 @@ export async function GET(req, { params }) {
         ok: true,
         background: {
           input: backgroundUrlRaw || "",
-          kind: bgKind,          // local | remote | none
-          resolved: bgResolved,  // resolved local path or URL
-          status: bgStatus,      // ok | blocked_html | fetch_failed | none
+          sanitized: backgroundUrlSafe || "",
+          kind: bgKind, // local | none
+          resolved: bgResolved,
+          status: bgStatus, // ok | fetch_failed | rejected | none
+          allowedPrefixes: ALLOWED_BG_PREFIXES,
         },
       });
     }
 
-    const titleRaw = qp(url, "title", dbDefaults.title || "Welcome!");
-    const subtitleRaw = qp(url, "subtitle", dbDefaults.subtitle || "");
+    const titleRaw = qp(url, "title", dbDefaults.title || "{user.name} just joined the server");
+    const subtitleRaw = qp(url, "subtitle", dbDefaults.subtitle || "Member #{membercount}");
 
     const bgColor = qp(url, "backgroundColor", dbDefaults.backgroundColor || "#0b1020");
     const textColor = qp(url, "textColor", dbDefaults.textColor || "#ffffff");
@@ -303,26 +272,25 @@ export async function GET(req, { params }) {
 
     const showAvatar = qp(url, "showAvatar", dbDefaults.showAvatar || "true") !== "false";
 
-    const username = truncate(qp(url, "username", ""), 36);
-    const serverName = truncate(qp(url, "serverName", ""), 40);
-    const memberCount = qp(url, "membercount", qp(url, "memberCount", ""));
+    const username = truncate(qp(url, "username", ""), 36) || "New member";
+    const serverName = truncate(qp(url, "serverName", ""), 40) || "this server";
+    const memberCount = qp(url, "membercount", qp(url, "memberCount", "")) || "?";
 
     const avatarUrl = qp(url, "avatarUrl", "");
     const serverIconUrl = qp(url, "serverIconUrl", "");
 
+    const vars = {
+      username,
+      serverName,
+      memberCount,
+      avatarUrl,
+    };
+
+    const primaryLineText = truncate(renderTokens(titleRaw, vars), 140);
+    const secondaryLineText = truncate(renderTokens(subtitleRaw, vars), 140);
+
     const W = 1200;
     const H = 420;
-
-    const primaryLineText = truncate(
-      titleRaw.replaceAll("{user.name}", username || "New member"),
-      140
-    );
-    const secondaryLineText = truncate(
-      subtitleRaw
-        .replaceAll("{membercount}", memberCount || "?")
-        .replaceAll("{server.name}", serverName || "this server"),
-      140
-    );
 
     const textX = 320;
     const rightSafe = 120;
@@ -332,10 +300,8 @@ export async function GET(req, { params }) {
     const subtitleSize = fitFontSize(secondaryLineText, maxTextWidth, 22, 16);
 
     const [avatarRes, iconRes] = await Promise.all([
-      showAvatar
-        ? fetchAsDataUriWithStatus(avatarUrl)
-        : Promise.resolve({ dataUri: null, status: "none" }),
-      fetchAsDataUriWithStatus(serverIconUrl),
+      showAvatar && avatarUrl ? fetchAsDataUriWithStatus(avatarUrl) : Promise.resolve({ dataUri: null, status: "none" }),
+      serverIconUrl ? fetchAsDataUriWithStatus(serverIconUrl) : Promise.resolve({ dataUri: null, status: "none" }),
     ]);
 
     const avatarData = avatarRes.dataUri;
@@ -418,6 +384,10 @@ export async function GET(req, { params }) {
       headers: {
         "Content-Type": "image/png",
         "Cache-Control": "no-store",
+
+        // Debug headers (super useful)
+        "X-WoC-Background-Input": encodeURIComponent(backgroundUrlRaw || ""),
+        "X-WoC-Background-Sanitized": encodeURIComponent(backgroundUrlSafe || ""),
         "X-WoC-Background-Status": bgStatus,
         "X-WoC-Background-Kind": bgKind,
         "X-WoC-Background-Resolved": encodeURIComponent(bgResolved || ""),
