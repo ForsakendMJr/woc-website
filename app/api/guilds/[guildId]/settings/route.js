@@ -1,112 +1,287 @@
+// app/api/guilds/[guildId]/settings/route.js
 import { NextResponse } from "next/server";
 import dbConnect from "../../../../lib/mongodb";
 import GuildSettings from "../../../../models/GuildSettings";
 
-
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/* ---------------------------------------------------- */
-/* utils */
-/* ---------------------------------------------------- */
+const MODULE_KEYS = [
+  "moderation",
+  "logging",
+  "clan",
+  "combat",
+  "economy",
+  "fun",
+  "marriage",
+  "housing",
+  "quest",
+  "utility",
+  "application",
+];
 
-function isSnowflake(id) {
-  return /^[0-9]{17,20}$/.test(String(id || ""));
+function isSnowflake(x) {
+  const s = String(x || "").trim();
+  return /^\d{17,20}$/.test(s);
 }
 
-function deepMerge(target, source) {
-  if (typeof target !== "object" || target === null) return source;
-  if (typeof source !== "object" || source === null) return target;
+function extractGuildId(req, params) {
+  const p = params?.guildId ? String(params.guildId).trim() : "";
+  if (isSnowflake(p)) return p;
 
-  const out = Array.isArray(target) ? [...target] : { ...target };
+  try {
+    const url = new URL(req.url);
+    const q = (url.searchParams.get("guildId") || "").trim();
+    if (isSnowflake(q)) return q;
 
-  for (const key of Object.keys(source)) {
-    const sv = source[key];
-    const tv = target[key];
+    const parts = url.pathname.split("/").filter(Boolean);
+    const i = parts.indexOf("guilds");
+    const fromPath = i !== -1 ? (parts[i + 1] || "").trim() : "";
+    if (isSnowflake(fromPath)) return fromPath;
+  } catch {}
 
-    if (
-      sv &&
-      typeof sv === "object" &&
-      !Array.isArray(sv) &&
-      tv &&
-      typeof tv === "object" &&
-      !Array.isArray(tv)
-    ) {
-      out[key] = deepMerge(tv, sv);
-    } else {
-      out[key] = sv;
-    }
+  return "";
+}
+
+function deepClone(obj) {
+  try {
+    // eslint-disable-next-line no-undef
+    if (typeof structuredClone === "function") return structuredClone(obj);
+  } catch {}
+  return JSON.parse(JSON.stringify(obj));
+}
+
+/** Deep merge objects; arrays overwritten */
+function deepMerge(base, patch) {
+  const a = base && typeof base === "object" ? base : {};
+  const b = patch && typeof patch === "object" ? patch : {};
+  const out = deepClone(a);
+
+  for (const [k, v] of Object.entries(b)) {
+    if (Array.isArray(v)) out[k] = v;
+    else if (v && typeof v === "object") out[k] = deepMerge(out[k], v);
+    else out[k] = v;
+  }
+  return out;
+}
+
+function normalizeWelcomeType(raw) {
+  const t = String(raw || "").trim().toLowerCase();
+  if (!t) return "message";
+  if (t === "embed+text") return "embed_text";
+  if (t === "both") return "embed_text";
+  if (t === "message") return "message";
+  if (t === "embed") return "embed";
+  if (t === "embed_text") return "embed_text";
+  if (t === "card") return "card";
+  return "message";
+}
+
+function typeToMode(type) {
+  const t = normalizeWelcomeType(type);
+  if (t === "embed_text") return "both";
+  if (t === "embed") return "embed";
+  return "message";
+}
+function modeToType(mode) {
+  const m = String(mode || "").trim().toLowerCase();
+  if (m === "both") return "embed_text";
+  if (m === "embed") return "embed";
+  return "message";
+}
+
+function mergeModuleDefaults(existingModules) {
+  const out =
+    existingModules && typeof existingModules === "object"
+      ? deepClone(existingModules)
+      : {};
+
+  for (const key of MODULE_KEYS) {
+    if (!out[key] || typeof out[key] !== "object") out[key] = {};
+    if (typeof out[key].enabled !== "boolean") out[key].enabled = true;
+    if (!out[key].subs || typeof out[key].subs !== "object") out[key].subs = {};
   }
 
   return out;
 }
 
-/* ---------------------------------------------------- */
-/* GET – fetch settings */
-/* ---------------------------------------------------- */
+// Full default welcome payload
+function defaultWelcome() {
+  return {
+    enabled: false,
+    channelId: "",
+    dmEnabled: false,
+    message: "Welcome {user} to **{server}**! ✨",
+    autoRoleId: "",
 
-export async function GET(req, { params }) {
-  const guildId = params?.guildId;
+    type: "message", // message | embed | embed_text | card
+    mode: "message", // legacy: message | embed | both
 
-  if (!isSnowflake(guildId)) {
-    return NextResponse.json(
-      { ok: false, error: "Invalid guildId" },
-      { status: 400 }
-    );
-  }
+    embed: {
+      color: "#7c3aed",
+      title: "Welcome!",
+      url: "",
+      description: "Welcome {user} to **{server}**!",
+      author: { name: "{server}", iconUrl: "", url: "" },
+      thumbnailUrl: "{avatar}",
+      imageUrl: "",
+      footer: { text: "Member #{membercount}", iconUrl: "" },
+      fields: [],
+    },
 
-  await dbConnect();
-
-  let doc = await GuildSettings.findOne({ guildId }).lean();
-
-  if (!doc) {
-    doc = await GuildSettings.create({ guildId });
-  }
-
-  return NextResponse.json({ ok: true, settings: doc });
+    card: {
+      enabled: false,
+      title: "{user.name} just joined the server",
+      subtitle: "Member #{membercount}",
+      backgroundColor: "#0b1020",
+      textColor: "#ffffff",
+      overlayOpacity: 0.35,
+      backgroundUrl: "",
+      showAvatar: true,
+    },
+  };
 }
 
-/* ---------------------------------------------------- */
-/* PATCH – save settings (dashboard) */
-/* ---------------------------------------------------- */
+function defaultSettings(guildId) {
+  return {
+    guildId,
+    prefix: "!",
+    moderation: { enabled: true, automod: false, antiLink: false, antiSpam: true },
+    logs: {
+      enabled: true,
+      generalChannelId: "",
+      modlogChannelId: "",
+      joinChannelId: "",
+      leaveChannelId: "",
+      messageChannelId: "",
+      roleChannelId: "",
+      nicknameChannelId: "",
+      commandChannelId: "",
+      editChannelId: "",
+    },
+    welcome: defaultWelcome(),
+    modules: MODULE_KEYS.reduce((acc, k) => {
+      acc[k] = { enabled: true, subs: {} };
+      return acc;
+    }, {}),
+    personality: { mood: "story", sass: 35, narration: true },
+  };
+}
 
-export async function PATCH(req, { params }) {
-  const guildId = params?.guildId;
+function normalizeWelcomeOnSave(welcomeInput) {
+  const base = defaultWelcome();
+  const w = deepMerge(base, welcomeInput || {});
+
+  // infer type from legacy mode if missing
+  if (!w.type && w.mode) w.type = modeToType(w.mode);
+
+  w.type = normalizeWelcomeType(w.type);
+  w.mode = typeToMode(w.type);
+
+  // ensure card.enabled true when type=card
+  if (w.type === "card") {
+    w.card = w.card || {};
+    w.card.enabled = true;
+  } else {
+    w.card = w.card || {};
+  }
+
+  return w;
+}
+
+export async function GET(req, ctx) {
+  const guildId = extractGuildId(req, ctx?.params);
 
   if (!isSnowflake(guildId)) {
     return NextResponse.json(
-      { ok: false, error: "Invalid guildId" },
+      { ok: false, settings: null, guildId: "", error: "Missing/invalid guildId." },
       { status: 400 }
     );
   }
 
-  const body = await req.json().catch(() => null);
-  if (!body || typeof body !== "object") {
-    return NextResponse.json(
-      { ok: false, error: "Invalid payload" },
-      { status: 400 }
-    );
-  }
+  try {
+    await dbConnect();
 
-  await dbConnect();
+    let doc = await GuildSettings.findOne({ guildId });
+    if (!doc) doc = await GuildSettings.create(defaultSettings(guildId));
 
-  const existing =
-    (await GuildSettings.findOne({ guildId }).lean()) || { guildId };
+    // normalize + ensure defaults exist
+    const beforeModules = JSON.stringify(doc.modules || {});
+    const beforeWelcome = JSON.stringify(doc.welcome || {});
 
-  // 🔥 THIS is the critical fix
-  const merged = deepMerge(existing, body);
+    doc.modules = mergeModuleDefaults(doc.modules);
+    doc.welcome = normalizeWelcomeOnSave(doc.welcome);
 
-  // Always force guildId consistency
-  merged.guildId = guildId;
+    const afterModules = JSON.stringify(doc.modules || {});
+    const afterWelcome = JSON.stringify(doc.welcome || {});
 
-  const updated = await GuildSettings.findOneAndUpdate(
-    { guildId },
-    merged,
-    {
-      upsert: true,
-      new: true,
-      setDefaultsOnInsert: true,
+    if (beforeModules !== afterModules || beforeWelcome !== afterWelcome) {
+      await doc.save();
     }
-  ).lean();
 
-  return NextResponse.json({ ok: true, settings: updated });
+    return NextResponse.json(
+      { ok: true, settings: doc.toObject(), guildId },
+      { status: 200 }
+    );
+  } catch (e) {
+    return NextResponse.json(
+      { ok: false, settings: null, guildId, error: String(e?.message || e) },
+      { status: 500 }
+    );
+  }
+}
+
+export async function PUT(req, ctx) {
+  const guildId = extractGuildId(req, ctx?.params);
+
+  if (!isSnowflake(guildId)) {
+    return NextResponse.json(
+      { ok: false, settings: null, guildId: "", error: "Missing/invalid guildId." },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const body = await req.json().catch(() => ({}));
+    const incoming =
+      body && typeof body === "object" && body.settings && typeof body.settings === "object"
+        ? body.settings
+        : body;
+
+    if (!incoming || typeof incoming !== "object") {
+      return NextResponse.json(
+        { ok: false, settings: null, guildId, error: "Body must be JSON." },
+        { status: 400 }
+      );
+    }
+
+    await dbConnect();
+
+    const existingDoc = await GuildSettings.findOne({ guildId });
+    const base = existingDoc?.toObject?.() || defaultSettings(guildId);
+
+    const next = deepMerge(base, incoming);
+    next.guildId = guildId;
+    next.modules = mergeModuleDefaults(next.modules);
+
+    // merge + normalize welcome safely
+    const mergedWelcomeRaw = deepMerge(base?.welcome || {}, incoming?.welcome || {});
+    next.welcome = normalizeWelcomeOnSave(mergedWelcomeRaw);
+
+    const updated = await GuildSettings.findOneAndUpdate(
+      { guildId },
+      { $set: next },
+      { new: true, upsert: true }
+    );
+
+    return NextResponse.json(
+      { ok: true, settings: updated?.toObject?.() ?? updated, guildId },
+      { status: 200 }
+    );
+  } catch (e) {
+    return NextResponse.json(
+      { ok: false, settings: null, guildId, error: String(e?.message || e) },
+      { status: 500 }
+    );
+  }
 }
