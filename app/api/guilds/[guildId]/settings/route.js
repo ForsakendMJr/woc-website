@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import dbConnect from "@/app/lib/mongodb";
-import GuildSettings from "@/app/models/GuildSettings";
+import dbConnect from "../../../../lib/mongodb";
+import GuildSettings from "../../../../models/GuildSettings";
+
 
 export const dynamic = "force-dynamic";
 
