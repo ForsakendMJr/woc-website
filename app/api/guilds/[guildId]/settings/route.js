@@ -43,6 +43,14 @@ function extractGuildId(req, params) {
   return "";
 }
 
+/**
+ * IMPORTANT:
+ * - structuredClone() breaks Mongo ObjectId into a plain object (with buffer bytes),
+ *   which then causes "Cast to ObjectId failed" if you try to write _id back.
+ * - So we avoid cloning documents with ObjectIds via structuredClone.
+ * - In this route, we only deepClone plain JSON objects, but base (toObject) may include _id.
+ *   We will strip immutables before saving.
+ */
 function deepClone(obj) {
   try {
     // eslint-disable-next-line no-undef
@@ -63,6 +71,34 @@ function deepMerge(base, patch) {
     else out[k] = v;
   }
   return out;
+}
+
+/**
+ * Strip immutable / server-owned keys from an object tree.
+ * This prevents:
+ * - Mongo "Cannot update _id"
+ * - Mongoose "Cast to ObjectId failed for value {buffer: ...}"
+ */
+function stripImmutableDeep(obj) {
+  if (!obj || typeof obj !== "object") return obj;
+
+  // Remove known immutables / noisy keys at this level
+  delete obj._id;
+  delete obj.__v;
+  delete obj.createdAt;
+  delete obj.updatedAt;
+
+  for (const k of Object.keys(obj)) {
+    const v = obj[k];
+    if (!v || typeof v !== "object") continue;
+
+    if (Array.isArray(v)) {
+      for (const item of v) stripImmutableDeep(item);
+    } else {
+      stripImmutableDeep(v);
+    }
+  }
+  return obj;
 }
 
 function normalizeWelcomeType(raw) {
@@ -255,18 +291,28 @@ export async function PUT(req, ctx) {
       );
     }
 
+    // ✅ Never accept _id from client
+    delete incoming._id;
+    delete incoming.__v;
+    delete incoming.createdAt;
+    delete incoming.updatedAt;
+
     await dbConnect();
 
     const existingDoc = await GuildSettings.findOne({ guildId });
     const base = existingDoc?.toObject?.() || defaultSettings(guildId);
 
+    // ✅ Merge full settings
     const next = deepMerge(base, incoming);
     next.guildId = guildId;
     next.modules = mergeModuleDefaults(next.modules);
 
-    // merge + normalize welcome safely
+    // ✅ Merge + normalize welcome safely
     const mergedWelcomeRaw = deepMerge(base?.welcome || {}, incoming?.welcome || {});
     next.welcome = normalizeWelcomeOnSave(mergedWelcomeRaw);
+
+    // ✅ CRITICAL: remove immutables so $set cannot crash Mongo/Mongoose
+    stripImmutableDeep(next);
 
     const updated = await GuildSettings.findOneAndUpdate(
       { guildId },
