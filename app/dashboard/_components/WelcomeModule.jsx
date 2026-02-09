@@ -245,31 +245,53 @@ export default function WelcomeModule({
     onDirty(); // ✅ tells parent to setDirty(true)
   }
 
-  function setWelcome(patch) {
-    const next = deepClone(settings || {});
-    next.welcome = ensureWelcomeDefaults({ ...(next.welcome || {}), ...patch });
-    commit(next);
-  }
+function setWelcome(patch) {
+  const next = deepClone(settings || {});
+  const merged = ensureWelcomeDefaults({ ...(next.welcome || {}), ...patch });
 
-  function setEmbed(patch) {
-    const next = deepClone(settings || {});
-    const w = ensureWelcomeDefaults(next.welcome);
-    w.embed = { ...(w.embed || {}), ...patch };
-    next.welcome = w;
-    commit(next);
-  }
+  // ✅ auto-enable when editing welcome
+  merged.enabled = true;
 
-  function setCard(patch) {
-    const next = deepClone(settings || {});
-    const w = ensureWelcomeDefaults(next.welcome);
-    w.card = { ...(w.card || {}), ...patch };
-    next.welcome = w;
-    commit(next);
-  }
+  next.welcome = merged;
+  onChange(next);
+}
+
+
+function setEmbed(patch) {
+  const next = deepClone(settings || {});
+  const w = ensureWelcomeDefaults(next.welcome);
+
+  w.embed = { ...(w.embed || {}), ...patch };
+
+  // ✅ auto-enable when editing embed
+  w.enabled = true;
+
+  next.welcome = w;
+  onChange(next);
+}
+
+
+function setCard(patch) {
+  const next = deepClone(settings || {});
+  const w = ensureWelcomeDefaults(next.welcome);
+
+  w.type = "card";
+  w.card = { ...(w.card || {}), ...patch, enabled: true };
+
+  // ✅ auto-enable when editing card
+  w.enabled = true;
+
+  next.welcome = w;
+  onChange(next);
+}
+
 
   // ✅ Dedicated background setter with premium gating + preview refresh
   function setCardBackground(nextVal) {
     const nextBg = String(nextVal || "");
+w2.enabled = true; // ✅
+w2.type = "card";
+w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
 
     const premOpt = (premiumBackgrounds || []).find((o) => o.value === nextBg);
     if (premOpt) {

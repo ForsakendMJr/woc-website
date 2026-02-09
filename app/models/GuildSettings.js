@@ -138,8 +138,17 @@ const WelcomeSchema = new Schema(
     // welcome card
     card: { type: WelcomeCardSchema, default: () => ({}) },
   },
-  { _id: false }
+  {
+    _id: false,
+
+    // ✅ SAFE: prevents losing new nested fields later (future-proof)
+    strict: false,
+
+    // ✅ SAFE: keeps empty nested objects instead of stripping them
+    minimize: false,
+  }
 );
+
 
 // Ticket Tool style settings (future dashboard + web→bot sync)
 const TicketsSchema = new Schema(
