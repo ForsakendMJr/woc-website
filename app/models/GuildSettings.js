@@ -21,16 +21,6 @@ const LogsSchema = new Schema(
   { _id: false }
 );
 
-const WelcomeSchema = new Schema(
-  {
-    enabled: { type: Boolean, default: false },
-    channelId: { type: String, default: "" },
-    message: { type: String, default: "Welcome {user} to **{server}**! ✨" },
-    autoRoleId: { type: String, default: "" },
-  },
-  { _id: false }
-);
-
 const ModerationSchema = new Schema(
   {
     enabled: { type: Boolean, default: true },
@@ -50,16 +40,115 @@ const PersonalitySchema = new Schema(
   { _id: false }
 );
 
+// ---- Welcome v2 (matches dashboard + API route) ----
+
+const WelcomeEmbedAuthorSchema = new Schema(
+  {
+    name: { type: String, default: "{server}" },
+    iconUrl: { type: String, default: "" },
+    url: { type: String, default: "" },
+  },
+  { _id: false }
+);
+
+const WelcomeEmbedFooterSchema = new Schema(
+  {
+    text: { type: String, default: "Member #{membercount}" },
+    iconUrl: { type: String, default: "" },
+  },
+  { _id: false }
+);
+
+const WelcomeEmbedFieldSchema = new Schema(
+  {
+    name: { type: String, default: "Field title" },
+    value: { type: String, default: "Field value" },
+    inline: { type: Boolean, default: false },
+  },
+  { _id: false }
+);
+
+const WelcomeEmbedSchema = new Schema(
+  {
+    color: { type: String, default: "#7c3aed" },
+    title: { type: String, default: "Welcome!" },
+    url: { type: String, default: "" },
+    description: { type: String, default: "Welcome {user} to **{server}**!" },
+
+    author: { type: WelcomeEmbedAuthorSchema, default: () => ({}) },
+
+    thumbnailUrl: { type: String, default: "{avatar}" },
+    imageUrl: { type: String, default: "" },
+
+    footer: { type: WelcomeEmbedFooterSchema, default: () => ({}) },
+
+    fields: { type: [WelcomeEmbedFieldSchema], default: [] },
+  },
+  { _id: false }
+);
+
+const WelcomeCardSchema = new Schema(
+  {
+    enabled: { type: Boolean, default: false },
+
+    title: { type: String, default: "{user.name} just joined the server" },
+    subtitle: { type: String, default: "Member #{membercount}" },
+
+    backgroundColor: { type: String, default: "#0b1020" },
+    textColor: { type: String, default: "#ffffff" },
+    overlayOpacity: { type: Number, default: 0.35 },
+
+    backgroundUrl: { type: String, default: "" },
+    showAvatar: { type: Boolean, default: true },
+  },
+  { _id: false }
+);
+
+const WelcomeSchema = new Schema(
+  {
+    enabled: { type: Boolean, default: false },
+    channelId: { type: String, default: "" },
+
+    // main plain message (Message + Embed+Text uses this)
+    message: { type: String, default: "Welcome {user} to **{server}**! ✨" },
+
+    // autorole
+    autoRoleId: { type: String, default: "" },
+
+    // optional DM send
+    dmEnabled: { type: Boolean, default: false },
+
+    // canonical (dashboard uses this)
+    type: {
+      type: String,
+      default: "message",
+      enum: ["message", "embed", "embed_text", "card"],
+    },
+
+    // legacy compat (some docs may still use this)
+    mode: {
+      type: String,
+      default: "message",
+      enum: ["message", "embed", "both"],
+    },
+
+    // embed builder
+    embed: { type: WelcomeEmbedSchema, default: () => ({}) },
+
+    // welcome card
+    card: { type: WelcomeCardSchema, default: () => ({}) },
+  },
+  { _id: false }
+);
+
 // Ticket Tool style settings (future dashboard + web→bot sync)
 const TicketsSchema = new Schema(
   {
     enabled: { type: Boolean, default: false },
 
-    // Where tickets get created / handled
     categoryId: { type: String, default: "" },
     supportRoleIds: { type: [String], default: [] },
 
-    // Panel channels for different ticket types
     panels: {
       support: {
         channelId: { type: String, default: "" },
@@ -71,15 +160,12 @@ const TicketsSchema = new Schema(
       },
     },
 
-    // Transcripts/logging
     transcriptChannelId: { type: String, default: "" },
 
-    // Limits + naming
     maxOpenPerUser: { type: Number, default: 1 },
     nameFormatSupport: { type: String, default: "support-{num}" },
     nameFormatBug: { type: String, default: "bug-{num}" },
 
-    // Counters
     nextSupportNumber: { type: Number, default: 1 },
     nextBugNumber: { type: Number, default: 1 },
   },
@@ -88,7 +174,6 @@ const TicketsSchema = new Schema(
 
 const GuildSettingsSchema = new Schema(
   {
-    // Keep guildId ALWAYS as string
     guildId: {
       type: String,
       required: true,
@@ -100,30 +185,21 @@ const GuildSettingsSchema = new Schema(
     prefix: { type: String, default: "!" },
 
     moderation: { type: ModerationSchema, default: () => ({}) },
-
     logs: { type: LogsSchema, default: () => ({}) },
 
+    // ✅ now supports type/mode/dm/embed/card
     welcome: { type: WelcomeSchema, default: () => ({}) },
 
-    // Feature flags (category + sub-feature toggles)
-    // Mixed is fine here because you want dynamic categories/subkeys.
     modules: { type: Schema.Types.Mixed, default: {} },
 
     personality: { type: PersonalitySchema, default: () => ({}) },
 
-    // ✅ New section (safe to add; old docs will just not have it)
     tickets: { type: TicketsSchema, default: () => ({}) },
   },
   {
     timestamps: true,
-
-    // ✅ Important for “dashboard evolves over time”
     strict: false,
-
-    // ✅ Don’t strip empty objects (helps nested settings + future expansion)
     minimize: false,
-
-    // Optional: keeps docs cleaner
     versionKey: false,
   }
 );
