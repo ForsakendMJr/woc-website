@@ -10,10 +10,8 @@ import GuildSettings from "../../../../models/GuildSettings";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const ALLOWED_BG_PREFIXES = [
-  "/welcome-backgrounds/free/",
-  "/welcome-backgrounds/premium/",
-];
+// Only allow local public paths inside these folders
+const ALLOWED_BG_PREFIXES = ["/welcome-backgrounds/free/", "/welcome-backgrounds/premium/"];
 
 // --------------------
 // tiny utils
@@ -117,28 +115,42 @@ async function readPublicFileAsDataUri(publicPath) {
   }
 }
 
+// Normalize/sanitize any background input into a safe local public path or ""
 function sanitizeBackgroundUrl(value) {
   const raw = String(value || "").trim();
   if (!raw) return "";
 
-  const s = raw.replaceAll("\\", "/");
-
-  // Only allow local public paths inside our allowed folders
-  if (s.startsWith("/") && ALLOWED_BG_PREFIXES.some((p) => s.startsWith(p))) {
-    return s;
+  // normalize slashes + decode URL-encoded paths safely
+  let s = raw.replaceAll("\\", "/");
+  try {
+    // if it contains %2F etc, decode once
+    if (/%[0-9A-Fa-f]{2}/.test(s)) s = decodeURIComponent(s);
+  } catch {
+    // ignore decode failures
   }
 
-  // If someone passed a full URL to THIS SAME SITE, allow it only if it points to allowed folders
+  // If absolute URL, only allow SAME-SITE paths (still local)
   if (/^https?:\/\//i.test(s)) {
     try {
       const u = new URL(s);
-      const p = u.pathname || "";
-      if (p.startsWith("/") && ALLOWED_BG_PREFIXES.some((pref) => p.startsWith(pref))) return p;
-    } catch {}
+      s = u.pathname || "";
+    } catch {
+      return "";
+    }
   }
 
-  // Everything else is rejected (prevents random/unexpected backgrounds)
-  return "";
+  // Must be a rooted path
+  if (!s.startsWith("/")) return "";
+
+  // Lowercase compare for prefixes, but keep original case for file paths
+  const sLower = s.toLowerCase();
+  const ok = ALLOWED_BG_PREFIXES.some((p) => sLower.startsWith(p.toLowerCase()));
+  if (!ok) return "";
+
+  // Hard block path traversal attempts
+  if (s.includes("..")) return "";
+
+  return s;
 }
 
 function fitFontSize(text, maxWidthPx, baseSize, minSize) {
@@ -150,23 +162,37 @@ function fitFontSize(text, maxWidthPx, baseSize, minSize) {
   return clamp(size, minSize, baseSize);
 }
 
+// Strong token renderer (supports both dashboard + bot styles)
 function renderTokens(str, vars) {
   let out = String(str || "");
-  // common tokens (match your dashboard/bot mental model)
+
+  // user tokens
   out = out.replaceAll("{user.name}", vars.username);
   out = out.replaceAll("{username}", vars.username);
   out = out.replaceAll("{user}", vars.username);
-  out = out.replaceAll("{mention}", vars.username);
+  out = out.replaceAll("{mention}", vars.mention);
+  out = out.replaceAll("{tag}", vars.tag);
 
+  // server tokens
   out = out.replaceAll("{server}", vars.serverName);
   out = out.replaceAll("{server.name}", vars.serverName);
 
+  // count tokens
   out = out.replaceAll("{membercount}", vars.memberCount);
   out = out.replaceAll("{server.member_count}", vars.memberCount);
 
+  // misc
   out = out.replaceAll("{avatar}", vars.avatarUrl);
 
   return out;
+}
+
+function pickFirstNonEmpty(...vals) {
+  for (const v of vals) {
+    const s = String(v ?? "").trim();
+    if (s) return s;
+  }
+  return "";
 }
 
 export async function GET(req, { params }) {
@@ -179,7 +205,7 @@ export async function GET(req, { params }) {
     const { Resvg } = require("@resvg/resvg-js");
 
     // --------------------
-    // DB defaults
+    // DB defaults (welcome.card)
     // --------------------
     let dbDefaults = {
       backgroundUrl: "",
@@ -204,12 +230,12 @@ export async function GET(req, { params }) {
 
         if (wc && typeof wc === "object") {
           dbDefaults = {
-            backgroundUrl: wc.backgroundUrl || wc.backgroundImageUrl || "",
-            backgroundColor: wc.backgroundColor || "",
-            textColor: wc.textColor || "",
+            backgroundUrl: String(wc.backgroundUrl || wc.backgroundImageUrl || ""),
+            backgroundColor: String(wc.backgroundColor || ""),
+            textColor: String(wc.textColor || ""),
             overlayOpacity: typeof wc.overlayOpacity === "number" ? String(wc.overlayOpacity) : "",
-            title: wc.title || "",
-            subtitle: wc.subtitle || "",
+            title: String(wc.title || ""),
+            subtitle: String(wc.subtitle || ""),
             showAvatar: typeof wc.showAvatar === "boolean" ? String(wc.showAvatar) : "",
           };
         }
@@ -228,10 +254,9 @@ export async function GET(req, { params }) {
       dbDefaults.backgroundUrl ||
       "";
 
-    // ✅ sanitize/whitelist background
     const backgroundUrlSafe = sanitizeBackgroundUrl(backgroundUrlRaw);
 
-    // Load background (local only, by design)
+    // Load background (local only)
     let bgData = null;
     let bgStatus = "none";
     let bgResolved = "";
@@ -243,7 +268,6 @@ export async function GET(req, { params }) {
       bgData = await readPublicFileAsDataUri(backgroundUrlSafe);
       bgStatus = bgData ? "ok" : "fetch_failed";
     } else if (backgroundUrlRaw) {
-      // user tried to use a non-allowed background
       bgStatus = "rejected";
       bgKind = "none";
       bgResolved = "";
@@ -252,17 +276,19 @@ export async function GET(req, { params }) {
     if (metaMode) {
       return NextResponse.json({
         ok: true,
+        guildId,
         background: {
           input: backgroundUrlRaw || "",
           sanitized: backgroundUrlSafe || "",
-          kind: bgKind, // local | none
+          kind: bgKind,
           resolved: bgResolved,
-          status: bgStatus, // ok | fetch_failed | rejected | none
+          status: bgStatus,
           allowedPrefixes: ALLOWED_BG_PREFIXES,
         },
       });
     }
 
+    // NOTE: defaults should still be token friendly even if DB is blank
     const titleRaw = qp(url, "title", dbDefaults.title || "{user.name} just joined the server");
     const subtitleRaw = qp(url, "subtitle", dbDefaults.subtitle || "Member #{membercount}");
 
@@ -272,15 +298,29 @@ export async function GET(req, { params }) {
 
     const showAvatar = qp(url, "showAvatar", dbDefaults.showAvatar || "true") !== "false";
 
-    const username = truncate(qp(url, "username", ""), 36) || "New member";
-    const serverName = truncate(qp(url, "serverName", ""), 40) || "this server";
+    // Support multiple possible query keys so bot + dashboard both work
+    const username = truncate(
+      pickFirstNonEmpty(
+        qp(url, "username", ""),
+        qp(url, "userName", ""),
+        qp(url, "user", ""),
+        qp(url, "tag", "")
+      ),
+      36
+    );
+
+    const tag = truncate(qp(url, "tag", username), 48);
+
+    const serverName = truncate(pickFirstNonEmpty(qp(url, "serverName", ""), qp(url, "server", "")), 40) || "this server";
     const memberCount = qp(url, "membercount", qp(url, "memberCount", "")) || "?";
 
-    const avatarUrl = qp(url, "avatarUrl", "");
-    const serverIconUrl = qp(url, "serverIconUrl", "");
+    const avatarUrl = qp(url, "avatarUrl", qp(url, "avatar", "")) || "";
+    const serverIconUrl = qp(url, "serverIconUrl", qp(url, "iconUrl", "")) || "";
 
     const vars = {
-      username,
+      username: username || "New member",
+      tag: tag || (username || "New member"),
+      mention: username || "New member", // we can't mention without an ID in this route
       serverName,
       memberCount,
       avatarUrl,
@@ -385,7 +425,11 @@ export async function GET(req, { params }) {
         "Content-Type": "image/png",
         "Cache-Control": "no-store",
 
-        // Debug headers (super useful)
+        // Debug headers
+        "X-WoC-GuildId": encodeURIComponent(guildId || ""),
+        "X-WoC-Title": encodeURIComponent(primaryLineText || ""),
+        "X-WoC-Subtitle": encodeURIComponent(secondaryLineText || ""),
+
         "X-WoC-Background-Input": encodeURIComponent(backgroundUrlRaw || ""),
         "X-WoC-Background-Sanitized": encodeURIComponent(backgroundUrlSafe || ""),
         "X-WoC-Background-Status": bgStatus,

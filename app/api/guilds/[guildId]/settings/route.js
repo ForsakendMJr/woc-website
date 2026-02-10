@@ -43,14 +43,6 @@ function extractGuildId(req, params) {
   return "";
 }
 
-/**
- * IMPORTANT:
- * - structuredClone() breaks Mongo ObjectId into a plain object (with buffer bytes),
- *   which then causes "Cast to ObjectId failed" if you try to write _id back.
- * - So we avoid cloning documents with ObjectIds via structuredClone.
- * - In this route, we only deepClone plain JSON objects, but base (toObject) may include _id.
- *   We will strip immutables before saving.
- */
 function deepClone(obj) {
   try {
     // eslint-disable-next-line no-undef
@@ -71,34 +63,6 @@ function deepMerge(base, patch) {
     else out[k] = v;
   }
   return out;
-}
-
-/**
- * Strip immutable / server-owned keys from an object tree.
- * This prevents:
- * - Mongo "Cannot update _id"
- * - Mongoose "Cast to ObjectId failed for value {buffer: ...}"
- */
-function stripImmutableDeep(obj) {
-  if (!obj || typeof obj !== "object") return obj;
-
-  // Remove known immutables / noisy keys at this level
-  delete obj._id;
-  delete obj.__v;
-  delete obj.createdAt;
-  delete obj.updatedAt;
-
-  for (const k of Object.keys(obj)) {
-    const v = obj[k];
-    if (!v || typeof v !== "object") continue;
-
-    if (Array.isArray(v)) {
-      for (const item of v) stripImmutableDeep(item);
-    } else {
-      stripImmutableDeep(v);
-    }
-  }
-  return obj;
 }
 
 function normalizeWelcomeType(raw) {
@@ -141,7 +105,6 @@ function mergeModuleDefaults(existingModules) {
   return out;
 }
 
-// Full default welcome payload
 function defaultWelcome() {
   return {
     enabled: false,
@@ -150,8 +113,8 @@ function defaultWelcome() {
     message: "Welcome {user} to **{server}**! ✨",
     autoRoleId: "",
 
-    type: "message", // message | embed | embed_text | card
-    mode: "message", // legacy: message | embed | both
+    type: "message",
+    mode: "message",
 
     embed: {
       color: "#7c3aed",
@@ -214,15 +177,20 @@ function normalizeWelcomeOnSave(welcomeInput) {
   w.type = normalizeWelcomeType(w.type);
   w.mode = typeToMode(w.type);
 
-  // ensure card.enabled true when type=card
-  if (w.type === "card") {
-    w.card = w.card || {};
-    w.card.enabled = true;
-  } else {
-    w.card = w.card || {};
-  }
+  // align card.enabled if type=card
+  w.card = w.card || {};
+  if (w.type === "card") w.card.enabled = true;
 
   return w;
+}
+
+function stripMongoInternals(obj) {
+  const o = obj && typeof obj === "object" ? deepClone(obj) : {};
+  delete o._id;
+  delete o.__v;
+  delete o.createdAt;
+  delete o.updatedAt;
+  return o;
 }
 
 export async function GET(req, ctx) {
@@ -242,18 +210,10 @@ export async function GET(req, ctx) {
     if (!doc) doc = await GuildSettings.create(defaultSettings(guildId));
 
     // normalize + ensure defaults exist
-    const beforeModules = JSON.stringify(doc.modules || {});
-    const beforeWelcome = JSON.stringify(doc.welcome || {});
-
     doc.modules = mergeModuleDefaults(doc.modules);
     doc.welcome = normalizeWelcomeOnSave(doc.welcome);
 
-    const afterModules = JSON.stringify(doc.modules || {});
-    const afterWelcome = JSON.stringify(doc.welcome || {});
-
-    if (beforeModules !== afterModules || beforeWelcome !== afterWelcome) {
-      await doc.save();
-    }
+    await doc.save();
 
     return NextResponse.json(
       { ok: true, settings: doc.toObject(), guildId },
@@ -291,33 +251,35 @@ export async function PUT(req, ctx) {
       );
     }
 
-    // ✅ Never accept _id from client
-    delete incoming._id;
-    delete incoming.__v;
-    delete incoming.createdAt;
-    delete incoming.updatedAt;
-
     await dbConnect();
 
-    const existingDoc = await GuildSettings.findOne({ guildId });
-    const base = existingDoc?.toObject?.() || defaultSettings(guildId);
+    const existing = await GuildSettings.findOne({ guildId }).lean();
+    const base = existing ? stripMongoInternals(existing) : defaultSettings(guildId);
 
-    // ✅ Merge full settings
-    const next = deepMerge(base, incoming);
-    next.guildId = guildId;
-    next.modules = mergeModuleDefaults(next.modules);
+    // merge safely
+    const merged = deepMerge(base, stripMongoInternals(incoming));
+    merged.guildId = guildId;
+    merged.modules = mergeModuleDefaults(merged.modules);
 
-    // ✅ Merge + normalize welcome safely
+    // merge welcome separately + normalize
     const mergedWelcomeRaw = deepMerge(base?.welcome || {}, incoming?.welcome || {});
-    next.welcome = normalizeWelcomeOnSave(mergedWelcomeRaw);
+    merged.welcome = normalizeWelcomeOnSave(mergedWelcomeRaw);
 
-    // ✅ CRITICAL: remove immutables so $set cannot crash Mongo/Mongoose
-    stripImmutableDeep(next);
+    // never allow internals to be set
+    const toSet = stripMongoInternals(merged);
 
     const updated = await GuildSettings.findOneAndUpdate(
       { guildId },
-      { $set: next },
-      { new: true, upsert: true }
+      {
+        $set: toSet,
+        $setOnInsert: { guildId },
+      },
+      {
+        new: true,
+        upsert: true,
+        runValidators: true,
+        setDefaultsOnInsert: true,
+      }
     );
 
     return NextResponse.json(

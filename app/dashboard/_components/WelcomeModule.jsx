@@ -236,75 +236,101 @@ export default function WelcomeModule({
     onDirty();
   }
 
-  function setWelcomePatch(patch) {
-    const s2 = deepClone(settings || {});
-    const w2 = ensureWelcomeDefaults({ ...(s2.welcome || {}), ...patch });
+function commitWelcome(nextWelcome, { forceEnable = false } = {}) {
+  const s2 = deepClone(settings || {});
+  const w2 = ensureWelcomeDefaults(nextWelcome);
 
-    // only auto-enable when editing content-y fields (NOT when toggling enabled off)
-    if (Object.prototype.hasOwnProperty.call(patch, "enabled")) {
-      w2.enabled = !!patch.enabled;
-    } else {
-      w2.enabled = true;
-    }
+  // If caller wants to ensure it's enabled (editing content),
+  // do it unless user explicitly set enabled false somewhere else.
+  if (forceEnable && typeof w2.enabled !== "boolean") w2.enabled = true;
+  if (forceEnable) w2.enabled = true;
 
-    s2.welcome = w2;
-    commit(s2);
-  }
-
-  function setEmbedPatch(patch) {
-    const s2 = deepClone(settings || {});
-    const w2 = ensureWelcomeDefaults(s2.welcome);
-
-    w2.embed = { ...(w2.embed || {}), ...patch };
-    w2.enabled = true;
-
-    s2.welcome = w2;
-    commit(s2);
-  }
-
-  function setCardPatch(patch) {
-    const s2 = deepClone(settings || {});
-    const w2 = ensureWelcomeDefaults(s2.welcome);
-
+  // Keep invariants:
+  // - type normalized by ensureWelcomeDefaults
+  // - if card type, card.enabled must be true
+  if (normalizeWelcomeType(w2.type) === "card") {
     w2.type = "card";
-    w2.card = { ...(w2.card || {}), ...patch, enabled: true };
-    w2.enabled = true;
-
-    s2.welcome = w2;
-    commit(s2);
+    w2.card = { ...(w2.card || {}), enabled: true };
+  } else {
+    // never accidentally leave card.enabled true if user switches away
+    w2.card = { ...(w2.card || {}) };
+    if (typeof w2.card.enabled !== "boolean") w2.card.enabled = false;
   }
+
+  s2.welcome = w2;
+  commit(s2);
+}
+
+function setWelcomePatch(patch) {
+  const current = ensureWelcomeDefaults(settings?.welcome);
+
+  // Merge patch
+  const merged = ensureWelcomeDefaults({ ...(current || {}), ...(patch || {}) });
+
+  // Only auto-enable if user is not directly toggling enabled
+  const togglingEnabled = Object.prototype.hasOwnProperty.call(patch || {}, "enabled");
+
+  commitWelcome(merged, { forceEnable: !togglingEnabled });
+}
+
+function setEmbedPatch(patch) {
+  const current = ensureWelcomeDefaults(settings?.welcome);
+
+  const merged = ensureWelcomeDefaults({
+    ...(current || {}),
+    // keep current type unless user later changes it
+    embed: { ...(current?.embed || {}), ...(patch || {}) },
+  });
+
+  // Editing embed should enable welcome
+  commitWelcome(merged, { forceEnable: true });
+}
+
+function setCardPatch(patch) {
+  const current = ensureWelcomeDefaults(settings?.welcome);
+
+  const merged = ensureWelcomeDefaults({
+    ...(current || {}),
+    type: "card",
+    card: { ...(current?.card || {}), ...(patch || {}), enabled: true },
+  });
+
+  // Editing card should enable welcome
+  commitWelcome(merged, { forceEnable: true });
+}
+
 
   // ✅ FIXED background setter (this was broken in your paste)
-  function setCardBackground(nextVal) {
-    const nextBg = String(nextVal || "");
+function setCardBackground(nextVal) {
+  const nextBg = String(nextVal || "");
 
-    // premium gate check
-    const premOpt = (premiumBackgrounds || []).find((o) => o.value === nextBg);
-    if (premOpt) {
-      const required = normalizeTier(premOpt.tier || "supporter");
-      const allowed = !!premiumActive && hasTier(normalizeTier(premiumTier), required);
-      if (!allowed) {
-        setBgNotice(`Locked: "${premOpt.label}" requires ${required.replaceAll("_", " ")} Premium.`);
-        return;
-      }
+  const premOpt = (premiumBackgrounds || []).find((o) => o.value === nextBg);
+  if (premOpt) {
+    const required = normalizeTier(premOpt.tier || "supporter");
+    const allowed = !!premiumActive && hasTier(normalizeTier(premiumTier), required);
+    if (!allowed) {
+      setBgNotice(`Locked: "${premOpt.label}" requires ${required.replaceAll("_", " ")} Premium.`);
+      return;
     }
-
-    setBgNotice("");
-
-    const s2 = deepClone(settings || {});
-    const w2 = ensureWelcomeDefaults(s2.welcome);
-
-    w2.type = "card";
-    w2.enabled = true;
-    w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
-
-    s2.welcome = w2;
-    commit(s2);
-
-    setPreviewError("");
-    setMetaStatus("");
-    setPreviewBust(Date.now());
   }
+
+  setBgNotice("");
+
+  const s2 = deepClone(settings || {});
+  const w2 = ensureWelcomeDefaults(s2.welcome);
+
+  w2.enabled = true;
+  w2.type = "card";
+  w2.card = { ...(w2.card || {}), backgroundUrl: nextBg, enabled: true };
+
+  s2.welcome = w2;
+  commit(s2);
+
+  setPreviewError("");
+  setMetaStatus("");
+  setPreviewBust(Date.now());
+}
+
 
   // Preview URL
   const previewUrl = useMemo(() => {

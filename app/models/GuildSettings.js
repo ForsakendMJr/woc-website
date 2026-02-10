@@ -3,6 +3,9 @@ import mongoose from "mongoose";
 
 const { Schema } = mongoose;
 
+// --------------------
+// Logs
+// --------------------
 const LogsSchema = new Schema(
   {
     enabled: { type: Boolean, default: true },
@@ -18,9 +21,12 @@ const LogsSchema = new Schema(
     commandChannelId: { type: String, default: "" },
     editChannelId: { type: String, default: "" },
   },
-  { _id: false }
+  { _id: false, minimize: false }
 );
 
+// --------------------
+// Moderation
+// --------------------
 const ModerationSchema = new Schema(
   {
     enabled: { type: Boolean, default: true },
@@ -28,27 +34,33 @@ const ModerationSchema = new Schema(
     antiLink: { type: Boolean, default: false },
     antiSpam: { type: Boolean, default: true },
   },
-  { _id: false }
+  { _id: false, minimize: false }
 );
 
+// --------------------
+// Personality
+// --------------------
 const PersonalitySchema = new Schema(
   {
     mood: { type: String, default: "story" },
     sass: { type: Number, default: 35 },
     narration: { type: Boolean, default: true },
   },
-  { _id: false }
+  { _id: false, minimize: false }
 );
 
-// ---- Welcome v2 (matches dashboard + API route) ----
+// =====================================================
+// Welcome v2 (matches dashboard + API route)
+// =====================================================
 
+// Embed sub-schemas
 const WelcomeEmbedAuthorSchema = new Schema(
   {
     name: { type: String, default: "{server}" },
     iconUrl: { type: String, default: "" },
     url: { type: String, default: "" },
   },
-  { _id: false }
+  { _id: false, minimize: false }
 );
 
 const WelcomeEmbedFooterSchema = new Schema(
@@ -56,7 +68,7 @@ const WelcomeEmbedFooterSchema = new Schema(
     text: { type: String, default: "Member #{membercount}" },
     iconUrl: { type: String, default: "" },
   },
-  { _id: false }
+  { _id: false, minimize: false }
 );
 
 const WelcomeEmbedFieldSchema = new Schema(
@@ -65,7 +77,7 @@ const WelcomeEmbedFieldSchema = new Schema(
     value: { type: String, default: "Field value" },
     inline: { type: Boolean, default: false },
   },
-  { _id: false }
+  { _id: false, minimize: false }
 );
 
 const WelcomeEmbedSchema = new Schema(
@@ -84,9 +96,10 @@ const WelcomeEmbedSchema = new Schema(
 
     fields: { type: [WelcomeEmbedFieldSchema], default: [] },
   },
-  { _id: false }
+  { _id: false, minimize: false }
 );
 
+// Card sub-schema
 const WelcomeCardSchema = new Schema(
   {
     enabled: { type: Boolean, default: false },
@@ -101,9 +114,10 @@ const WelcomeCardSchema = new Schema(
     backgroundUrl: { type: String, default: "" },
     showAvatar: { type: Boolean, default: true },
   },
-  { _id: false }
+  { _id: false, minimize: false }
 );
 
+// Welcome main schema
 const WelcomeSchema = new Schema(
   {
     enabled: { type: Boolean, default: false },
@@ -141,48 +155,60 @@ const WelcomeSchema = new Schema(
   {
     _id: false,
 
-    // ✅ SAFE: prevents losing new nested fields later (future-proof)
+    // ✅ SAFE: welcome evolves often; do not drop unknown nested keys
     strict: false,
 
-    // ✅ SAFE: keeps empty nested objects instead of stripping them
+    // ✅ SAFE: keep empty objects
     minimize: false,
   }
 );
 
+// =====================================================
+// Tickets (future dashboard + web→bot sync)
+// =====================================================
+const TicketPanelSchema = new Schema(
+  {
+    channelId: { type: String, default: "" },
+    messageId: { type: String, default: "" },
+  },
+  { _id: false, minimize: false }
+);
 
-// Ticket Tool style settings (future dashboard + web→bot sync)
 const TicketsSchema = new Schema(
   {
     enabled: { type: Boolean, default: false },
 
+    // Where tickets get created / handled
     categoryId: { type: String, default: "" },
     supportRoleIds: { type: [String], default: [] },
 
+    // Panel channels for different ticket types
     panels: {
-      support: {
-        channelId: { type: String, default: "" },
-        messageId: { type: String, default: "" },
-      },
-      bug: {
-        channelId: { type: String, default: "" },
-        messageId: { type: String, default: "" },
-      },
+      support: { type: TicketPanelSchema, default: () => ({}) },
+      bug: { type: TicketPanelSchema, default: () => ({}) },
     },
 
+    // Transcripts/logging
     transcriptChannelId: { type: String, default: "" },
 
+    // Limits + naming
     maxOpenPerUser: { type: Number, default: 1 },
     nameFormatSupport: { type: String, default: "support-{num}" },
     nameFormatBug: { type: String, default: "bug-{num}" },
 
+    // Counters
     nextSupportNumber: { type: Number, default: 1 },
     nextBugNumber: { type: Number, default: 1 },
   },
-  { _id: false }
+  { _id: false, minimize: false }
 );
 
+// =====================================================
+// Guild Settings
+// =====================================================
 const GuildSettingsSchema = new Schema(
   {
+    // Keep guildId ALWAYS as string
     guildId: {
       type: String,
       required: true,
@@ -196,24 +222,32 @@ const GuildSettingsSchema = new Schema(
     moderation: { type: ModerationSchema, default: () => ({}) },
     logs: { type: LogsSchema, default: () => ({}) },
 
-    // ✅ now supports type/mode/dm/embed/card
+    // ✅ Welcome v2
     welcome: { type: WelcomeSchema, default: () => ({}) },
 
+    // Feature flags (dynamic categories/subkeys)
     modules: { type: Schema.Types.Mixed, default: {} },
 
     personality: { type: PersonalitySchema, default: () => ({}) },
 
+    // Tickets
     tickets: { type: TicketsSchema, default: () => ({}) },
   },
   {
     timestamps: true,
+
+    // ✅ dashboard evolves over time
     strict: false,
+
+    // ✅ don’t strip empty nested objects
     minimize: false,
+
+    // Optional: keeps docs cleaner
     versionKey: false,
   }
 );
 
-// Extra safety: if someone accidentally writes null objects, normalize on save
+// Extra safety: normalize null objects on save
 GuildSettingsSchema.pre("save", function normalize(next) {
   if (!this.logs) this.logs = {};
   if (!this.welcome) this.welcome = {};
